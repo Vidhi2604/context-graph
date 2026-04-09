@@ -35,37 +35,67 @@ No existing system answers these questions across verticals. ContextMesh solves 
 ### Multi-Vertical, Multi-Tenant SaaS
 
 ```
-┌──────────────────────────────────────────────────────┐
-│                   CONTEXTMESH PLATFORM                │
-│                                                       │
-│  ┌─────────────┐   ┌────────────────┐                │
-│  │  Auth +      │   │  Plan Gating   │                │
-│  │  Onboarding  │   │  (Starter/Pro/ │                │
-│  │             │   │   Enterprise)  │                │
-│  └──────┬──────┘   └───────┬────────┘                │
-│         └─────────┬────────┘                          │
-│                   ▼                                    │
-│  ┌────────────────────────────────────────────────┐   │
-│  │          SHARED CORE ENGINE                     │   │
-│  │  Universal Search · Graph Viz · Timeline ·      │   │
-│  │  LLM Insights · Reasoning Chain · API           │   │
-│  └─────────────────┬──────────────────────────────┘   │
-│           ┌────────┴────────┐                          │
-│           ▼                 ▼                          │
-│  ┌─────────────────┐  ┌──────────────────┐           │
-│  │  RETAIL          │  │  HEALTHCARE       │           │
-│  │  Vertical        │  │  Vertical         │           │
-│  │                  │  │                   │           │
-│  │  Schema:         │  │  Schema:          │           │
-│  │  Profile,        │  │  Profile,         │           │
-│  │  Identity,       │  │  Identity,        │           │
-│  │  Event, Product, │  │  Visit, Diagnosis,│           │
-│  │  Payment, Policy,│  │  Treatment,       │           │
-│  │  Agent, Outcome  │  │  Provider, Claim, │           │
-│  │                  │  │  Protocol,        │           │
-│  │  Demo: Myntra    │  │  Medication       │           │
-│  └─────────────────┘  └──────────────────┘           │
-└──────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                     CONTEXTMESH PLATFORM                      │
+│                                                               │
+│  ┌──────────────────────────────────────────────────────┐    │
+│  │           AGENT INTEGRATION LAYER                     │    │
+│  │                                                       │    │
+│  │  ┌──────────────┐ ┌────────────┐ ┌───────────────┐  │    │
+│  │  │  MCP Server  │ │  REST API  │ │  Python / JS  │  │    │
+│  │  │  (AI agents  │ │  (bots,    │ │  SDK          │  │    │
+│  │  │  auto-       │ │  backends, │ │  (1-line      │  │    │
+│  │  │  discover)   │ │  webhooks) │ │  setup)       │  │    │
+│  │  └──────┬───────┘ └─────┬──────┘ └──────┬────────┘  │    │
+│  │         └───────────────┼───────────────┘            │    │
+│  │                         ▼                             │    │
+│  │              API Key Auth · Tenant Scoping            │    │
+│  └─────────────────────────┬────────────────────────────┘    │
+│                            ▼                                  │
+│  ┌─────────────┐   ┌────────────────┐                        │
+│  │  Auth +      │   │  Plan Gating   │                        │
+│  │  Onboarding  │   │  (Starter/Pro/ │                        │
+│  │              │   │   Enterprise)  │                        │
+│  └──────┬──────┘   └───────┬────────┘                        │
+│         └─────────┬────────┘                                  │
+│                   ▼                                            │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │              SHARED CORE ENGINE                         │  │
+│  │                                                         │  │
+│  │  Kafka Pipeline · Identity Resolution · Neo4j Graph     │  │
+│  │  Vector Search · Graph Algorithms · Groq LLM            │  │
+│  │  Transcript Extraction · Relevance Scoring              │  │
+│  │  Commitment Tracker · Alert Engine                      │  │
+│  └──────────────┬──────────────────┬──────────────────────┘  │
+│                 │                  │                           │
+│     ┌───────────┴──────┐  ┌───────┴────────────┐             │
+│     ▼                  ▼  ▼                    ▼              │
+│  ┌──────────────┐  ┌──────────────────────────────┐          │
+│  │  SIDE A       │  │  SIDE B                      │          │
+│  │  Agent Memory │  │  Intelligence Dashboard      │          │
+│  │               │  │                              │          │
+│  │  /agent/      │  │  /dashboard (search+graph)   │          │
+│  │   context     │  │  /dashboard/analytics        │          │
+│  │  /mcp         │  │  /dashboard/policies         │          │
+│  │  /events      │  │  /dashboard/agents           │          │
+│  │  /events/     │  │  /dashboard/commitments      │          │
+│  │   transcript  │  │  /alerts · /stats            │          │
+│  └──────────────┘  └──────────────────────────────┘          │
+│                                                               │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │              VERTICAL SCHEMAS                           │  │
+│  │                                                         │  │
+│  │  ┌─────────────────┐       ┌──────────────────────┐    │  │
+│  │  │  RETAIL          │       │  HEALTHCARE           │    │  │
+│  │  │  Profile,        │       │  Profile,             │    │  │
+│  │  │  Identity,       │       │  Identity,            │    │  │
+│  │  │  Event, Product, │       │  Visit, Diagnosis,    │    │  │
+│  │  │  Payment, Policy,│       │  Treatment, Provider, │    │  │
+│  │  │  Agent, Outcome  │       │  Claim, Protocol,     │    │  │
+│  │  │  Demo: Myntra    │       │  Medication, Outcome  │    │  │
+│  │  └─────────────────┘       └──────────────────────┘    │  │
+│  └────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 Each tenant (organization) gets:
