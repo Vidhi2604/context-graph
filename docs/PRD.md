@@ -176,6 +176,8 @@ ContextMesh solves this with a **Profile + Identity** architecture:
 
 This works identically across verticals — retail has cookies + emails + phones, healthcare has MRNs + Aadhaar + insurance IDs. The resolution engine is shared.
 
+**Production roadmap:** Identity resolution scales to 4 tiers — deterministic (current), probabilistic (Fellegi-Sunter/Splink for fuzzy matching), graph-walk (traverse shared edges in Neo4j to infer identity), and LLM-assisted (for ambiguous cases like "the woman from Acme" in a transcript). Hackathon = tier 1 (deterministic). Tiers 2-4 are additive.
+
 ### Shared Node Types (Both Verticals)
 
 | Node | Purpose | Key Properties |
@@ -189,13 +191,14 @@ This works identically across verticals — retail has cookies + emails + phones
 |---|---|---|
 | **Profile** | profile_id, name, tier, city, ltv | Priya M., Gold, Bangalore, LTV: Rs.1.2L |
 | **Identity** | type, value, source, verified | email, priya@gmail.com, app_sdk, true |
-| **Event** | type, timestamp, status, amount, channel | Return initiated, Day 37, Exception approved |
+| **Event** | type, timestamp, status, amount, channel, confidence_score | Return initiated, Day 37, Exception approved, 0.87 |
 | **Product** | id, name, category, brand, price | Nike Air Max, Footwear, Rs.8,499 |
 | **Session** | id, device, os, channel, location | Mobile, iOS, App, Bangalore |
-| **Policy** | name, version, rules, effective_date | Return Policy v3.2, 30-day window |
+| **Policy** | name, version, rules, effective_date, status | Return Policy v3.2, 30-day window, active |
 | **Agent** | id, name, role, team | Ravi K., L2 Support, Returns Team |
 | **Outcome** | type, value, follow_up | Customer retained, product resold at 60% |
 | **Payment** | method, amount, status | COD, Rs.8,499, Refund pending |
+| **Commitment** | promise_text, deadline, status, assignee | "Refund within 48h", Apr 7, breached, Ravi K. |
 
 ### Healthcare Node Types
 
@@ -203,15 +206,16 @@ This works identically across verticals — retail has cookies + emails + phones
 |---|---|---|
 | **Profile** | profile_id, name, age, gender, blood_group, city, insurance_provider | Amit K., 58, Male, B+, Mumbai, Star Health |
 | **Identity** | type, value, source, verified | mrn, MH-4829, hospital_ehr, true |
-| **Visit** | visit_id, type, timestamp, department, status, priority | Emergency, Apr 3, Cardiology, Discharged, Critical |
+| **Visit** | visit_id, type, timestamp, department, status, priority, confidence_score | Emergency, Apr 3, Cardiology, Discharged, Critical, 0.91 |
 | **Diagnosis** | diagnosis_id, code (ICD-10), name, severity, chronic | I21.0, Acute MI, Critical, No |
 | **Treatment** | treatment_id, name, type, cost, duration | Angioplasty, Procedure, Rs.2.5L, 3 hours |
 | **Medication** | medication_id, name, dosage, frequency, duration | Metformin 500mg, Twice daily, 90 days |
 | **Provider** | provider_id, name, specialization, department, experience_years | Dr. Sharma, Cardiologist, Cardiology, 15 years |
 | **InsuranceClaim** | claim_id, amount, status, denial_reason, payer | CLM-4829, Rs.2.5L, Denied, Pre-auth missing, Star Health |
-| **Protocol** | protocol_id, name, version, condition, standard_treatment | Acute MI Protocol v2.1, STEMI, Primary PCI within 90 min |
+| **Protocol** | protocol_id, name, version, condition, standard_treatment, status | Acute MI Protocol v2.1, STEMI, Primary PCI within 90 min, active |
 | **Outcome** | outcome_id, type, readmission, days_to_readmission, mortality | Discharged, Readmitted, 18 days |
 | **Department** | department_id, name, type | Cardiology, Clinical |
+| **Commitment** | promise_text, deadline, status, assignee | "Follow-up angiogram in 2 weeks", Mar 29, breached, Dr. Sharma |
 
 ### Retail Relationships
 
@@ -223,9 +227,13 @@ Event -[:NEXT]-> Event
 Event -[:INVOLVES]-> Product
 Event -[:PAID_VIA]-> Payment
 Event -[:GOVERNED_BY]-> Policy
+Event -[:OVERRODE]-> Policy
 Event -[:HANDLED_BY]-> Agent
 Event -[:RESULTED_IN]-> Outcome
+Event -[:CREATED_COMMITMENT]-> Commitment
 Session -[:CONTAINS]-> Event
+Profile -[:HAS_COMMITMENT]-> Commitment
+Policy -[:SUPERSEDED_BY]-> Policy
 ```
 
 ### Healthcare Relationships
@@ -239,13 +247,17 @@ Visit -[:TREATED_WITH]-> Treatment
 Visit -[:PRESCRIBED]-> Medication
 Visit -[:ATTENDED_BY]-> Provider
 Visit -[:GOVERNED_BY]-> Protocol
+Visit -[:DEVIATED_FROM]-> Protocol
 Visit -[:RESULTED_IN]-> Outcome
 Visit -[:CLAIMED_VIA]-> InsuranceClaim
 Visit -[:IN_DEPARTMENT]-> Department
+Visit -[:CREATED_COMMITMENT]-> Commitment
 Visit -[:NEXT]-> Visit
 Diagnosis -[:INDICATES]-> Treatment
 Treatment -[:USES]-> Medication
 Provider -[:BELONGS_TO]-> Department
+Profile -[:HAS_COMMITMENT]-> Commitment
+Protocol -[:SUPERSEDED_BY]-> Protocol
 ```
 
 ### How Search Finds People
@@ -289,9 +301,11 @@ Doesn't matter which identifier you search by — you always land on the unified
 | Context graph viz | Up to 25 nodes | Up to 100 nodes | Unlimited |
 | Timeline view | Last 7 days | Last 90 days | Unlimited |
 | LLM insights | Not available | Summary only | Full reasoning chain |
-| API access | Not available | Not available | Full REST API |
+| API access | Not available | REST API | Full REST + MCP + SDK |
+| Audit trail export | Not available | Not available | Full compliance export (SOX/HIPAA) |
+| PII redaction | Not available | Basic (masking) | Full (Presidio, custom recognizers) |
 | Team members | 1 | 5 | Unlimited |
-| Seed demo data | Included | Included | Custom import |
+| Seed demo data | Included | Included | Custom import + historical backfill |
 
 No payment integration for now — plan selector in settings, features gated by plan flag on the org.
 
@@ -335,13 +349,19 @@ No payment integration for now — plan selector in settings, features gated by 
 - Color-coded by node type (consistent within vertical)
 - Zoom, pan, drag, minimap
 - Side panel shows full details on click
+- **Nodes sized proportionally to relevance score** — high-relevance nodes are larger, low-relevance nodes are dimmed
+- **Confidence badge** on extracted event/visit nodes shows extraction confidence (0.87, 0.92, etc.)
 
-**Retail colors:** User (green), Event (blue), Product (purple), Policy (yellow), Agent (teal), Payment (orange), Outcome (red)
+**Retail colors:** User (green), Event (blue), Product (purple), Policy (yellow), Agent (teal), Payment (orange), Outcome (red), Commitment (pink)
 
-**Healthcare colors:** Patient (green), Visit (blue), Diagnosis (red), Treatment (purple), Medication (cyan), Provider (teal), InsuranceClaim (orange), Protocol (yellow), Outcome (pink), Department (indigo)
+**Healthcare colors:** Patient (green), Visit (blue), Diagnosis (red), Treatment (purple), Medication (cyan), Provider (teal), InsuranceClaim (orange), Protocol (yellow), Outcome (pink), Department (indigo), Commitment (lime)
 
 ### F5: Event Timeline View
 **Chronological view that complements the graph.**
+
+- **Sort toggle:** "Sort by time" vs "Sort by relevance"
+- **Filter:** "Show only high-relevance events (>0.7)" toggle
+- Each event shows its confidence score as a subtle badge
 
 **Retail example: Search "shoes"**
 ```
@@ -354,13 +374,14 @@ Apr 5  ── 12 returns initiated (8 size issues)
 
 **Healthcare example: Search "Patient Amit Kumar"**
 ```
-Mar 15 ── ER Visit: Chest pain, Cardiology
-Mar 15 ── Diagnosis: Acute MI (STEMI)
-Mar 15 ── Treatment: Primary PCI / Angioplasty
-Mar 16 ── ICU → Ward transfer
-Mar 20 ── Discharge, medications prescribed
+Mar 15 ── ER Visit: Chest pain, Cardiology [confidence: 0.95]
+Mar 15 ── Diagnosis: Acute MI (STEMI) [confidence: 0.93]
+Mar 15 ── Treatment: Primary PCI / Angioplasty [confidence: 0.91]
+Mar 16 ── ICU → Ward transfer [confidence: 0.97]
+Mar 20 ── Discharge, medications prescribed [confidence: 0.89]
+Mar 29 ── ⚠ Commitment breached: Follow-up angiogram not scheduled [confidence: 0.94]
 Apr 02 ── Readmission: Chest pain recurrence
-Apr 02 ── Diagnosis: Post-PCI restenosis
+Apr 02 ── Diagnosis: Post-PCI restenosis [confidence: 0.88]
 ```
 
 **Healthcare example: Search "cardiology department"**
@@ -483,6 +504,10 @@ Mar W4 ── 50 visits, 14 procedures, 3 readmissions
 
 All endpoints scoped to tenant via auth token.
 
+**Note on structured vs. unstructured ingestion:** Structured events (web SDK, CRM, webhooks) do not go through LLM extraction — they write directly to the graph via deterministic mapping rules. Only unstructured content (transcripts, free-text notes, doctor dictation) goes through LLM extraction. This means ~90% of production event volume is processed at near-zero cost.
+
+**Production roadmap:** At scale, this becomes a tiered extraction pipeline — rules engine handles structured events (90% volume, zero LLM cost), a lightweight classifier filters non-decision-bearing unstructured content (cuts LLM costs by ~80%), and only decision-bearing content reaches the full extraction model. Orchestrated by Temporal for durable workflows with retry, compensation, and human-in-the-loop support.
+
 ### Transcript Ingestion (F7a)
 
 **The most powerful ingestion path.** Raw conversation goes in, structured context graph comes out.
@@ -507,12 +532,13 @@ All endpoints scoped to tenant via auth token.
 }
 ```
 
-**LLM extracts from the conversation:**
+**LLM extracts from the conversation (with confidence scoring):**
 - **Identifiers** — phone, email, name, order ID (for identity resolution)
 - **Events** — support_call, return_initiated (with product, payment, policy, agent)
 - **Decisions** — policy exception granted (Day 35 > 30-day window, reason: Gold tier)
 - **Commitments** — "Refund within 48 hours" (tracked with deadline)
 - **Sentiment** — frustrated → resolved
+- **Confidence score** — 0.0 to 1.0 per extracted event, indicating how clearly the transcript supports the extraction
 
 **Works for both verticals:**
 - Retail: support calls, complaint calls, sales conversations
@@ -520,9 +546,14 @@ All endpoints scoped to tenant via auth token.
 
 **Extracted events flow into the same Kafka pipeline as structured events — identity resolution, graph write, commitment tracking all happen identically.**
 
+**Confidence scoring:** Every LLM extraction returns a confidence score (0.0 – 1.0) stored as a property on the Event/Visit node. In the hackathon, all extracted events are written to the graph regardless of confidence. The score is displayed in the UI (graph node badge, timeline badge) so evaluators can see extraction quality at a glance.
+
+**Production roadmap:** In production, confidence gates the write path — high-confidence (>0.85) auto-commits, medium-confidence (0.6–0.85) routes to a human review queue (HITL), low-confidence (<0.6) is rejected. Validated human reviews become training data for fine-tuning smaller, cheaper extraction models (the HITL → SLM flywheel).
+
 **Acceptance criteria:**
 - Accepts transcript JSON from any STT provider
 - LLM extracts structured events in < 5 seconds
+- Each extracted event includes a confidence score (0.0–1.0)
 - Extracted events produce to Kafka (same pipeline as structured events)
 - Multiple events extracted from a single conversation (support call + return + commitment)
 - Sentiment tracked as a property on the call event
@@ -633,8 +664,8 @@ await cm.track('return_initiated', { product: 'Nike Air Max', reason: 'size' });
 {
   "profile": { "name": "Priya M.", "tier": "Gold", "city": "Bangalore", "ltv": 120000, "risk_score": 0.72 },
   "recent_events": [
-    { "type": "return_initiated", "product": "Nike Air Max", "days_ago": 3, "relevance": 0.94 },
-    { "type": "purchase", "product": "Levis Jacket", "days_ago": 15, "relevance": 0.71 }
+    { "type": "return_initiated", "product": "Nike Air Max", "days_ago": 3, "relevance": 0.94, "confidence": 0.87 },
+    { "type": "purchase", "product": "Levis Jacket", "days_ago": 15, "relevance": 0.71, "confidence": 0.95 }
   ],
   "open_commitments": [
     { "promise": "Refund within 48h", "deadline": "2026-04-11", "status": "breached", "assignee": "Ravi K." }
@@ -681,6 +712,7 @@ The current dashboard (`/dashboard`) has search + graph + timeline + insights. S
 **Policy Drift (`/dashboard/policies`):**
 - Table: every policy with written rule vs actual override rate
 - Highlight policies > 30% override rate in red
+- **Policy version tracking:** Show active vs superseded policies side by side. Traces linked to superseded policies are visually dimmed and scored lower by the relevance engine.
 - Click any policy → graph shows all related exceptions
 - Trend line: override rate over time (is it getting worse?)
 - LLM recommendation per drifted policy
@@ -716,11 +748,13 @@ The current dashboard (`/dashboard`) has search + graph + timeline + insights. S
 - 20 products across Footwear, Apparel, Accessories
 - Mix of tiers, cities, payment methods
 - Embedded patterns: Nike sizing issues, EORS spike, Gold tier exceptions, COD-return correlation, agent Ravi's approval pattern
+- **Policy versions seeded:** Return Policy v3.1 (superseded, effective Jan 2025) and v3.2 (active, effective Oct 2025). Traces linked to v3.1 have relevance decay applied.
 
 #### Healthcare (Hospital)
 - 50 patient journeys across departments
 - 15 providers across Cardiology, Orthopedics, General Medicine, Emergency, Neurology
 - Mix of conditions: cardiac events, fractures, diabetes management, respiratory infections, neurological events
+- **Protocol versions seeded:** Acute MI Protocol v1.0 (superseded) and v2.1 (active). Old cases under v1.0 score lower in relevance.
 - Embedded patterns:
   1. **Readmission cluster:** 4 cardiac patients readmitted within 30 days — linked to missed follow-up protocol
   2. **Insurance denial pattern:** Knee replacement claims denied 60% when pre-auth missing
@@ -728,6 +762,8 @@ The current dashboard (`/dashboard`) has search + graph + timeline + insights. S
   4. **Medication switch pattern:** Diabetic patients switching from metformin to insulin after ER visit — protocol says try dose increase first
   5. **ER bottleneck:** Neurology consult wait > 4 hours causing 3x longer ER stays
   6. **Department load imbalance:** Cardiology 40% over capacity, Orthopedics 20% under
+
+**Data sensitivity note:** All demo data is fully synthetic. No real patient, customer, or business data is used. Production roadmap includes Presidio (open-source, container-based PII detection/redaction) running in-cluster before graph write — no data leaves the compute boundary. For healthcare production deployments, HIPAA BAA and PHI access controls are on the compliance roadmap.
 
 ### F11: Vector Similarity Search — "Find Similar"
 **"Find similar" button on any Profile, Event, or Visit node.** Uses Neo4j's built-in vector index to find semantically similar journeys, not just keyword matches.
@@ -831,9 +867,11 @@ Click "Discover Patterns"
 ```
 relevance = base_confidence
            × recency_weight    (exponential decay: EXP(-0.01 × age_days))
-           × policy_currency   (1.0 if active, 0.1 if superseded)
+           × policy_currency   (1.0 if active, 0.1 if superseded, 0.0 if revoked)
            × outcome_success   (1.0 if positive outcome, 0.5 if mixed, 0.2 if negative)
 ```
+
+**Policy currency is the key differentiator.** When a Policy or Protocol node has `status: superseded`, all traces linked to it via `GOVERNED_BY` or `OVERRODE` relationships automatically score lower. This prevents stale precedents from poisoning recommendations. The `SUPERSEDED_BY` edge connects old and new policy versions, so the graph explicitly tracks the version chain.
 
 **How it appears in the UI:**
 - Each node shows a relevance badge: `0.92`, `0.78`, `0.45`
@@ -863,6 +901,8 @@ Search: "STEMI treatment protocols"
 - Score is visible on the graph and timeline
 - High-relevance nodes are visually prominent
 - Filter available to hide low-relevance results
+
+**Production roadmap:** At scale, relevance scoring also incorporates approver authority (seniority-weighted) and precedent conflict resolution — when two precedents conflict, both are surfaced with an explanation of why each scored differently, and the agent's final decision becomes a new trace that adds signal to future rankings.
 
 ### F14: Commitment Tracker
 **Automatically extract promises and commitments as first-class graph nodes.**
@@ -964,6 +1004,7 @@ Displayed as a summary bar at the top of the dashboard or as a dedicated `/analy
 | **Policy Drift Detected** | Return Policy v3.2: 72% override rate | Protocol v2.1: 30% follow-up missed |
 | **Alerts Raised** | 4 active alerts | 3 active alerts |
 | **Profiles Resolved** | 50 profiles from 127 identity fragments | 50 profiles from 89 identity fragments |
+| **Avg Extraction Confidence** | 0.86 | 0.88 |
 
 **Acceptance criteria:**
 - Stats computed from actual graph data (not hardcoded)
@@ -1110,6 +1151,7 @@ Search Bar → POST /api/search (tenant-scoped)
 ### Setup
 - Two demo orgs pre-created: "Myntra Demo" (retail) and "City Hospital Demo" (healthcare)
 - Each pre-loaded with 50 realistic journeys and embedded patterns
+- Policy versions seeded (v3.1 superseded, v3.2 active) to demonstrate relevance decay
 
 ### Demo Flow (7 minutes)
 
@@ -1119,7 +1161,10 @@ Search Bar → POST /api/search (tenant-scoped)
 **2. Retail Demo (2.5 min)**
 - Search: `"Priya"` → full journey graph (browse → cart → purchase → return → refund)
 - Click return node → see Day 37 exception, policy says 30 days
+- Point out: confidence badges on extracted events, relevance scores on nodes
 - Click policy → see it's overridden 72% of the time for Gold tier
+- Note: traces linked to old Policy v3.1 are dimmed (superseded, lower relevance)
+- Show breached commitment: "Refund within 48h — deadline passed"
 - Search: `"shoes category"` → timeline shows EORS spike + return wave
 - Hit "Analyze" → reasoning chain: sizing issue → policy drift → recommendation
 
@@ -1129,6 +1174,7 @@ Search Bar → POST /api/search (tenant-scoped)
 **4. Healthcare Demo (2.5 min)**
 - Search: `"Amit Kumar"` → patient journey graph (ER → Diagnosis → Treatment → Discharge → Readmission)
 - Click readmission → see 18 days post-PCI, protocol follow-up was missed
+- Show breached commitment: "Follow-up angiogram — deadline passed"
 - Search: `"readmissions within 30 days"` → pattern across all patients, 4 linked to stent issue
 - Search: `"Dr. Sharma"` → provider view, see protocol deviations but better outcomes
 - Hit "Analyze" → reasoning chain: missed follow-up → stent batch issue → 3 at-risk patients identified
@@ -1137,12 +1183,15 @@ Search Bar → POST /api/search (tenant-scoped)
 - Search: `"insurance denials cardiology"` → claim denial graph with precedent patterns
 - Search: `"metformin to insulin switches"` → medication pattern timeline
 - Show API: POST /api/events → any hospital system can push events
+- Show MCP config: one JSON block, any AI agent gets full context
 
 ### Key Talking Points
 - "One platform. Two verticals. Same search bar. Same graph engine."
 - "Retail: why did this return happen? Healthcare: why was this patient readmitted?"
 - "Every AI insight shows its reasoning — context, logic chain, conclusion. Fully auditable."
-- "Not a demo. Production-ready: auth, multi-tenant, plan tiers, API."
+- "Every extraction has a confidence score. In production, low-confidence extractions go to human review — building a training flywheel."
+- "Stale precedents don't poison the graph — superseded policies are tracked and decayed automatically."
+- "Not a demo. Production-ready: auth, multi-tenant, plan tiers, API, MCP."
 - "Add any vertical — the graph engine is generic. Schema is the only thing that changes."
 
 ---
@@ -1197,7 +1246,10 @@ Plan selector in org settings. No payment — feature gating only for now.
 - [ ] Auth + org creation + vertical selection works
 - [ ] Retail vertical: full search, graph, timeline, insights with reasoning
 - [ ] Healthcare vertical: full search, graph, timeline, insights with reasoning
-- [ ] Both verticals seeded with 50 realistic journeys each
+- [ ] Both verticals seeded with 50 realistic journeys each (with policy version history)
+- [ ] Confidence scores visible on all extracted events/visits
+- [ ] Relevance scoring works (superseded policy traces score lower, recent traces score higher)
+- [ ] Commitment tracker: open/breached commitments visible on profiles
 - [ ] Plan gating works (features restricted by plan)
 - [ ] Universal search works with any query combination in both verticals
 - [ ] Sub-3-second response time on all queries
@@ -1209,6 +1261,8 @@ Plan selector in org settings. No payment — feature gating only for now.
 | Traces captured / day / client | 100+ |
 | Search query → result time | < 3 seconds |
 | Reasoning chain accuracy | 70%+ |
+| Extraction confidence (avg) | > 0.80 |
+| LLM cost per trace (production) | $0.08-0.12 (Phase 1) → $0.02-0.04 (Phase 4 with SLM) |
 | Org sign-ups (first month) | 50+ |
 | Vertical expansion | 2 → 5 verticals |
 
@@ -1223,4 +1277,7 @@ Plan selector in org settings. No payment — feature gating only for now.
 | Graph too dense to visualize | UI confusion | Limit nodes to 50-100; progressive disclosure |
 | Groq latency spike | Slow demo | Cache responses for demo queries |
 | Healthcare data sensitivity concerns | Judges worried about HIPAA | All demo data is synthetic; production roadmap includes HIPAA compliance |
+| LLM extraction quality < 70% | Bad data in graph | Confidence scoring surfaces quality; production adds HITL review queue as quality gate |
+| Stale precedents mislead agents | Wrong recommendations | Relevance scoring with policy currency decay; superseded policies auto-deprioritized |
+| Two verticals doubles build scope | Won't finish in time | Shared engine handles 90% — only schema + seed data + filters differ per vertical |
 | Two verticals doubles build scope | Won't finish in time | Shared engine handles 90% — only schema + seed data + filters differ per vertical |
