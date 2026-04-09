@@ -975,18 +975,33 @@ Displayed as a summary bar at the top of the dashboard or as a dedicated `/analy
 
 ## 6. Tech Stack
 
-| Layer | Technology | Why |
-|---|---|---|
-| **Framework** | Next.js 14 (App Router) | Full-stack in one deploy |
-| **Auth** | NextAuth.js (Google + credentials) | Multi-tenant auth with minimal setup |
-| **UI** | React 18 + Tailwind CSS | Fast iteration, dark theme |
-| **Graph Visualization** | React Flow | Interactive node graphs |
-| **Graph Database** | Neo4j (Aura free tier) | Purpose-built for graph queries + native vector index |
-| **Event Streaming** | Upstash Kafka (serverless) | Production-grade event pipeline, REST API, free tier |
-| **LLM** | Groq (llama-3.3-70b-versatile) | Sub-second inference |
-| **Validation** | Zod | Runtime schema validation |
-| **Language** | TypeScript | End-to-end type safety |
-| **Deployment** | AWS (or Vercel) + Neo4j Aura | Cloud deploy, managed graph DB |
+### Hackathon Stack (Current)
+
+| Layer | Technology | Why This (Hackathon) | Production Upgrade Path |
+|---|---|---|---|
+| **Framework** | Next.js 14 (App Router) | Full-stack in one deploy — API routes + dashboard + auth in a single project. Zero config deployment. | Same — Next.js scales to production. Add dedicated API service if needed. |
+| **Auth** | NextAuth.js (Google + credentials) | Multi-tenant auth in 1 hour setup. Google OAuth is free, no approval needed. | Add SAML/SSO for enterprise clients (Auth0 or Clerk) |
+| **UI** | React 18 + Tailwind CSS | Fast iteration, consistent dark theme, responsive out of the box. | Same — production-ready as-is |
+| **Graph Visualization** | React Flow | Best open-source graph UI. Interactive, draggable, zoomable. No license cost. | Same — or upgrade to Cytoscape.js for 10K+ node graphs |
+| **Graph Database** | Neo4j (Aura free tier) | Only graph DB with native vector search + graph algorithms (GDS) + full-text search in one database. Free tier: 200K nodes. Neptune can't do vector + algorithms. | Neo4j AuraDB Pro ($65/mo) or self-hosted on K8s |
+| **Event Streaming** | Upstash Kafka (serverless) | Real Kafka with REST API — no brokers to manage, no Docker needed. Free tier: 10K msgs/day. | Confluent Cloud or Strimzi on Kubernetes |
+| **LLM** | Groq (llama-3.3-70b-versatile) | Fastest inference (sub-500ms). Free tier: 30 req/min, 14K/day. Good enough for hackathon volume. | Anthropic API (Claude Sonnet) for extraction — better reasoning. Multi-provider routing: Claude for complex, Groq for speed, self-hosted SLM for high-volume classification. |
+| **App Database** | SQLite (via Prisma) | Zero setup — just a file. Handles users, orgs, plans. Perfect for hackathon. | PostgreSQL (AWS RDS or K8s operator) |
+| **Validation** | Zod | Runtime schema validation at API boundary. TypeScript-native. | Same — production-ready |
+| **Language** | TypeScript | End-to-end type safety. Same language frontend + backend. | Same |
+| **Deployment** | Vercel (or AWS Amplify) | One-click deploy from git. Free tier. Zero DevOps. | AWS EKS (Kubernetes) for multi-cloud + on-prem option |
+
+### Why These Specific Choices
+
+**Neo4j over Postgres/MongoDB:** A return exception connects to a customer, product, policy, agent, and outcome. In Postgres, that's 6 tables + 5 JOINs. In Neo4j, it's one traversal query. Graph databases are purpose-built for connected data — which is exactly what a context graph is.
+
+**Neo4j over AWS Neptune:** Neptune can't do vector search (needs separate OpenSearch), can't do graph algorithms (no GDS), can't deploy on-prem, and uses a limited subset of Cypher. Neo4j does all of these natively in one database.
+
+**Groq over OpenAI/Anthropic (for hackathon):** Groq's free tier is the most generous for our use case — 30 requests/minute is enough for demo + development. Response time is sub-500ms which makes the demo snappy. In production, we'd switch to Claude Sonnet for better extraction quality and add multi-provider routing.
+
+**Upstash Kafka over direct API → DB:** Even for a hackathon, Kafka gives us: decoupled ingestion (API responds instantly), durability (events survive crashes), replay (reprocess if schema changes). Upstash makes this free and simple — REST API, no Kafka client library needed.
+
+**SQLite over Postgres (for hackathon):** Users, orgs, and plans are simple relational data. SQLite is a file — zero setup, works with Prisma identically to Postgres. One config line change to upgrade later.
 
 ### Architecture
 

@@ -2908,11 +2908,32 @@ GOOGLE_CLIENT_SECRET=xxx
 
 | Service | Free Tier | Our Usage | Headroom |
 |---|---|---|---|
-| Neo4j Aura | 200K nodes, 400K rels | ~7K nodes | 96% |
+| Neo4j Aura | 200K nodes, 400K rels | ~8K nodes | 96% |
 | Upstash Kafka | 10K messages/day | ~200/demo | 98% |
 | Groq | 30 req/min, 14K/day | ~50/demo | 99% |
+| Vercel | Unlimited deploys, 100GB BW | Minimal | 99% |
+| Google OAuth | Unlimited | Minimal | 100% |
 
 **Neo4j Aura:**
 - Retail: ~50 profiles × 15 events × 5 context nodes + commitments = ~4.5K nodes
 - Healthcare: ~50 profiles × 8 visits × 6 context nodes + commitments = ~3.5K nodes
 - Total: ~8K nodes — well within limits
+
+**Total hackathon infrastructure cost: Rs.0**
+
+### Hackathon → Production Upgrade Path
+
+| Component | Hackathon (Now) | Production | Effort to Switch |
+|---|---|---|---|
+| **Graph DB** | Neo4j Aura Free (200K nodes) | Neo4j AuraDB Pro ($65/mo) or self-hosted on K8s | Change connection string |
+| **LLM** | Groq free (llama-3.3-70b) | Anthropic API (Claude Sonnet) for extraction + Groq for speed | Add provider config in LLM router |
+| **Event Streaming** | Upstash Kafka (10K/day) | Confluent Cloud or Strimzi on K8s | Change Kafka client config |
+| **App DB** | SQLite file (Prisma) | PostgreSQL (RDS or K8s) | Change 1 line in prisma schema |
+| **Hosting** | Vercel free | AWS EKS (Kubernetes) | Dockerfile + Helm chart |
+| **Auth** | NextAuth (Google + email) | Add SAML/SSO via Auth0 for enterprise | Add auth provider |
+| **Cache** | None (sub-3s without) | Redis for <100ms agent context | Add Redis client |
+| **Monitoring** | Console logs | Prometheus + Grafana + Jaeger | Add observability stack |
+| **PII** | Not needed (synthetic data) | Presidio (in-cluster container) | Add PII middleware |
+| **LLM Routing** | Single provider (Groq) | Multi-provider: Claude (complex) + Groq (speed) + self-hosted SLM (volume) | Build router service |
+
+Every upgrade is additive — no rewrites needed. The architecture is designed so each component can be swapped independently.
