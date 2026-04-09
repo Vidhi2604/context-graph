@@ -1,5 +1,19 @@
 # ContextMesh — Low-Level Design Document
 
+**PRD Version:** Updated (with confidence scoring, policy versioning, relevance decay, production roadmap signals)
+
+---
+
+# CHANGES FROM PREVIOUS LLD
+
+1. **Confidence scoring** — `confidence_score` added to Event/Visit node schemas, extraction pipeline, transcript extractor, graph mapper, and frontend rendering
+2. **Policy `status` + `SUPERSEDED_BY` edges** — Policy and Protocol nodes gain `status` (active/superseded/revoked), seed data includes version history, `SUPERSEDED_BY` relationship added
+3. **`OVERRODE` / `DEVIATED_FROM` edges** — distinguished from `GOVERNED_BY` for exception tracking
+4. **Relevance scoring formula** — updated to incorporate `policy_currency` from the `status` field and `e.confidence_score`, not version string matching
+5. **Seed data** — both verticals now include superseded policy/protocol versions with linked traces and confidence scores on events
+6. **Transcript extractor** — returns confidence per extracted event
+7. **Frontend** — confidence badges on nodes, relevance-based sizing, superseded-policy dimming
+
 ---
 
 ## 1. System Architecture
@@ -726,6 +740,7 @@ CREATE INDEX event_status     IF NOT EXISTS FOR (e:Event)   ON (e.status);
 CREATE INDEX product_category IF NOT EXISTS FOR (p:Product) ON (p.category);
 CREATE INDEX product_brand    IF NOT EXISTS FOR (p:Product) ON (p.brand);
 CREATE INDEX payment_method   IF NOT EXISTS FOR (p:Payment) ON (p.method);
+CREATE INDEX policy_status    IF NOT EXISTS FOR (p:Policy)  ON (p.status);
 
 // Full-text search
 CREATE FULLTEXT INDEX search_retail_products IF NOT EXISTS FOR (p:Product) ON EACH [p.name, p.brand, p.category];
@@ -736,13 +751,17 @@ CREATE FULLTEXT INDEX search_retail_products IF NOT EXISTS FOR (p:Product) ON EA
 (Profile)-[:HAS_IDENTITY]->(Identity)
 (Profile)-[:PERFORMED {at: DateTime}]->(Event)
 (Profile)-[:HAS_SESSION]->(Session)
+(Profile)-[:HAS_COMMITMENT]->(Commitment)
 (Event)-[:NEXT]->(Event)
 (Event)-[:INVOLVES]->(Product)
 (Event)-[:PAID_VIA]->(Payment)
 (Event)-[:GOVERNED_BY]->(Policy)
+(Event)-[:OVERRODE]->(Policy)
 (Event)-[:HANDLED_BY]->(Agent)
 (Event)-[:RESULTED_IN]->(Outcome)
+(Event)-[:CREATED_COMMITMENT]->(Commitment)
 (Session)-[:CONTAINS]->(Event)
+(Policy)-[:SUPERSEDED_BY]->(Policy)
 ```
 
 ### 5.4 Healthcare Schema — Indexes & Constraints
@@ -768,6 +787,7 @@ CREATE INDEX diagnosis_severity IF NOT EXISTS FOR (d:Diagnosis)       ON (d.seve
 CREATE INDEX diagnosis_icd      IF NOT EXISTS FOR (d:Diagnosis)       ON (d.icd_code);
 CREATE INDEX claim_status       IF NOT EXISTS FOR (ic:InsuranceClaim) ON (ic.status);
 CREATE INDEX provider_spec      IF NOT EXISTS FOR (pr:Provider)       ON (pr.specialization);
+CREATE INDEX protocol_status    IF NOT EXISTS FOR (p:Protocol)        ON (p.status);
 
 // Full-text search
 CREATE FULLTEXT INDEX search_hc_providers IF NOT EXISTS FOR (pr:Provider) ON EACH [pr.name, pr.specialization, pr.department];
@@ -779,18 +799,22 @@ CREATE FULLTEXT INDEX search_hc_diagnosis IF NOT EXISTS FOR (d:Diagnosis) ON EAC
 (Profile)-[:HAS_IDENTITY]->(Identity)
 (Profile)-[:HAD_VISIT {at: DateTime}]->(Visit)
 (Profile)-[:READMITTED {days_gap: Integer}]->(Visit)
+(Profile)-[:HAS_COMMITMENT]->(Commitment)
 (Visit)-[:DIAGNOSED_WITH]->(Diagnosis)
 (Visit)-[:TREATED_WITH]->(Treatment)
 (Visit)-[:PRESCRIBED]->(Medication)
 (Visit)-[:ATTENDED_BY]->(Provider)
 (Visit)-[:GOVERNED_BY]->(Protocol)
+(Visit)-[:DEVIATED_FROM]->(Protocol)
 (Visit)-[:RESULTED_IN]->(Outcome)
 (Visit)-[:CLAIMED_VIA]->(InsuranceClaim)
 (Visit)-[:IN_DEPARTMENT]->(Department)
+(Visit)-[:CREATED_COMMITMENT]->(Commitment)
 (Visit)-[:NEXT]->(Visit)
 (Diagnosis)-[:INDICATES]->(Treatment)
 (Treatment)-[:USES]->(Medication)
 (Provider)-[:BELONGS_TO]->(Department)
+(Protocol)-[:SUPERSEDED_BY]->(Protocol)
 ```
 
 ### 5.5 Identity Resolution Engine (lib/identity-resolver.ts)
@@ -1106,10 +1130,10 @@ You are a Neo4j Cypher query generator for a RETAIL context graph.
 GRAPH SCHEMA:
 - (:Profile {profile_id, name, tier, city, ltv, _tenant})         // Unified person
 - (:Identity {identity_id, type, value, source, verified, _tenant}) // email, phone, device, cookie
-- (:Event {id, event_type, timestamp, status, amount, channel, exception, _tenant})
+- (:Event {id, event_type, timestamp, status, amount, channel, exception, confidence_score, _tenant})
 - (:Product {product_id, name, category, brand, price, _tenant})
 - (:Session {session_id, device, os, location, _tenant})
-- (:Policy {policy_id, name, version, rule_summary, _tenant})
+- (:Policy {policy_id, name, version, rule_summary, status, _tenant})  // status: "active"|"superseded"|"revoked"
 - (:Agent {agent_id, name, role, team, _tenant})
 - (:Payment {payment_id, method, amount, status, _tenant})
 - (:Outcome {outcome_id, type, value, description, _tenant})
@@ -1120,9 +1144,18 @@ RELATIONSHIPS:
 (Profile)-[:HAS_SESSION]->(Session)-[:CONTAINS]->(Event)
 (Event)-[:INVOLVES]->(Product)
 (Event)-[:PAID_VIA]->(Payment)
-(Event)-[:GOVERNED_BY]->(Policy)
+(Event)-[:GOVERNED_BY]->(Policy)   // Policy was followed
+(Event)-[:OVERRODE]->(Policy)      // Policy was overridden (exception granted)
 (Event)-[:HANDLED_BY]->(Agent)
 (Event)-[:RESULTED_IN]->(Outcome)
+(Policy)-[:SUPERSEDED_BY]->(Policy)  // old version → new version
+
+NOTE: Use OVERRODE (not GOVERNED_BY) when querying for exceptions/overrides.
+Use pol.status = 'active' to filter for current policies only.
+EXAMPLE: "return exceptions under superseded policies" →
+  MATCH (e:Event {_tenant: "{tenantId}"})-[:OVERRODE]->(pol:Policy {status: "superseded"})
+  OPTIONAL MATCH (pol)-[:SUPERSEDED_BY]->(newPol:Policy)
+  RETURN e, pol, newPol ORDER BY e.timestamp DESC LIMIT 50
 
 IDENTITY RESOLUTION:
 - When searching by email/phone/device_id, match via Identity node:
@@ -1158,6 +1191,13 @@ EXAMPLE QUERIES:
   OPTIONAL MATCH (e)-[:INVOLVES]->(prod:Product)
   OPTIONAL MATCH (e)-[:PAID_VIA]->(pay:Payment)
   RETURN p, e, prod, pay ORDER BY e.timestamp DESC LIMIT 50
+
+- "return exceptions under superseded policies" →
+  MATCH (e:Event {_tenant: "{tenantId}"})-[:OVERRODE]->(pol:Policy {status: "superseded"})
+  OPTIONAL MATCH (pol)-[:SUPERSEDED_BY]->(newPol:Policy)
+  RETURN e, pol, newPol ORDER BY e.timestamp DESC LIMIT 50
+
+NOTE: (:Policy) has `status`: "active" | "superseded" | "revoked". Use OVERRODE for exceptions, GOVERNED_BY for normal cases. SUPERSEDED_BY links old→new policy versions.
 ```
 
 ### 7.2 Healthcare Prompt (verticals/healthcare/prompt.ts)
@@ -1168,13 +1208,13 @@ You are a Neo4j Cypher query generator for a HEALTHCARE context graph.
 GRAPH SCHEMA:
 - (:Profile {profile_id, name, age, gender, blood_group, city, insurance_provider, _tenant})  // Patient
 - (:Identity {identity_id, type, value, source, verified, _tenant})  // mrn, aadhaar, phone, insurance_id
-- (:Visit {visit_id, type, timestamp, department, status, priority, duration_hours, _tenant})
+- (:Visit {visit_id, type, timestamp, department, status, priority, duration_hours, confidence_score, _tenant})
 - (:Diagnosis {diagnosis_id, icd_code, name, severity, chronic, _tenant})
 - (:Treatment {treatment_id, name, type, cost, duration_hours, success, _tenant})
 - (:Medication {medication_id, name, dosage, frequency, duration_days, category, _tenant})
 - (:Provider {provider_id, name, specialization, department, experience_years, _tenant})
 - (:InsuranceClaim {claim_id, amount, status, denial_reason, payer, _tenant})
-- (:Protocol {protocol_id, name, version, condition, standard_treatment, _tenant})
+- (:Protocol {protocol_id, name, version, condition, standard_treatment, status, _tenant})  // status: "active"|"superseded"|"revoked"
 - (:Outcome {outcome_id, type, readmission, days_to_readmission, follow_up_scheduled, _tenant})
 - (:Department {department_id, name, type, capacity, _tenant})
 
@@ -1186,13 +1226,22 @@ RELATIONSHIPS:
 (Visit)-[:TREATED_WITH]->(Treatment)
 (Visit)-[:PRESCRIBED]->(Medication)
 (Visit)-[:ATTENDED_BY]->(Provider)
-(Visit)-[:GOVERNED_BY]->(Protocol)
+(Visit)-[:GOVERNED_BY]->(Protocol)    // Protocol was followed
+(Visit)-[:DEVIATED_FROM]->(Protocol)  // Protocol was deviated from
 (Visit)-[:RESULTED_IN]->(Outcome)
 (Visit)-[:CLAIMED_VIA]->(InsuranceClaim)
 (Visit)-[:IN_DEPARTMENT]->(Department)
 (Diagnosis)-[:INDICATES]->(Treatment)
 (Treatment)-[:USES]->(Medication)
 (Provider)-[:BELONGS_TO]->(Department)
+(Protocol)-[:SUPERSEDED_BY]->(Protocol)  // old version → new version
+
+NOTE: Use DEVIATED_FROM (not GOVERNED_BY) when querying for protocol deviations.
+Use prot.status = 'active' to filter for current protocols only.
+EXAMPLE: "protocol deviations" →
+  MATCH (v:Visit {_tenant: "{tenantId}"})-[:DEVIATED_FROM]->(prot:Protocol)
+  OPTIONAL MATCH (v)-[:ATTENDED_BY]->(pr:Provider)
+  RETURN v, prot, pr ORDER BY v.timestamp DESC LIMIT 50
 
 IDENTITY RESOLUTION:
 - When searching by MRN/aadhaar/phone/insurance_id, match via Identity:
@@ -1237,6 +1286,13 @@ EXAMPLE QUERIES:
   OPTIONAL MATCH (p)-[:HAD_VISIT]->(v:Visit)
   OPTIONAL MATCH (v)-[:DIAGNOSED_WITH]->(d:Diagnosis)
   RETURN p, i, v, d ORDER BY v.timestamp ASC LIMIT 50
+
+- "protocol deviations" →
+  MATCH (v:Visit {_tenant: "{tenantId}"})-[:DEVIATED_FROM]->(prot:Protocol)
+  OPTIONAL MATCH (v)-[:ATTENDED_BY]->(pr:Provider)
+  RETURN v, prot, pr ORDER BY v.timestamp DESC LIMIT 50
+
+NOTE: (:Protocol) has `status`: "active" | "superseded" | "revoked". Use DEVIATED_FROM for deviations, GOVERNED_BY for adherence. SUPERSEDED_BY links old→new protocol versions.
 
 [more examples...]
 ```
@@ -1441,11 +1497,13 @@ export async function POST(req: NextRequest) {
   // 4. Send to Groq for structured extraction
   const extracted = await groqExtract(extractionPrompt);
   // Returns: { identifiers, profile_data, events[], commitments[], sentiment }
+  // Each event now includes confidence_score: 0.0–1.0
 
   // 5. Produce extracted events to Kafka (same pipeline)
   for (const event of extracted.events) {
     await produceEvent(tenantId, {
       ...event,
+      confidence_score: event.confidence_score ?? 0.7,  // default if LLM omits it
       identifiers: extracted.identifiers,
       profile_data: extracted.profile_data,
       source: 'voice_stt',
@@ -1483,7 +1541,13 @@ Extract ALL of the following from the conversation:
 1. IDENTIFIERS: phone, email, name, order_id — anything that identifies the customer
 2. PROFILE DATA: tier/membership level, city if mentioned
 3. EVENTS: every action or decision (support_call, return_initiated, complaint, etc.)
-   For each event include: event_type, properties, product details, payment info, policy applied, agent action
+   For each event include:
+   - event_type, properties, product details, payment info, policy applied, agent action
+   - confidence_score: 0.0 to 1.0 — how clearly does the transcript support this extraction?
+     Use 0.9+ if the transcript explicitly states it.
+     Use 0.7-0.9 if it's strongly implied but not explicit.
+     Use 0.5-0.7 if you're inferring from context.
+     Use <0.5 if it's a guess.
 4. DECISIONS: any policy exceptions, escalations, overrides — include reasoning
 5. COMMITMENTS: any promises made ("refund within 48h", "callback tomorrow")
    Include: promise_text, deadline (ISO date), assignee
@@ -1504,7 +1568,10 @@ Extract ALL of the following:
 1. IDENTIFIERS: MRN, phone, name, aadhaar — anything identifying the patient
 2. PROFILE DATA: age, gender, blood group, city, insurance provider
 3. EVENTS: every clinical event (visit, diagnosis, treatment, medication, discharge)
-   For each: event_type, details, severity, department, provider
+   For each:
+   - event_type, details, severity, department, provider
+   - confidence_score: 0.0 to 1.0 — how clearly does the transcript support this extraction?
+     Use 0.9+ if explicitly stated, 0.7-0.9 if strongly implied, 0.5-0.7 if inferred, <0.5 if a guess.
 4. DECISIONS: any protocol deviations, treatment choices, referrals — include reasoning
 5. COMMITMENTS: follow-up appointments, medication instructions, referrals
    Include: promise_text, deadline, assignee (doctor/department)
@@ -1516,7 +1583,7 @@ TRANSCRIPT:
 {transcript_text}
 ```
 
-**After extraction, events flow into the same Kafka → Consumer → Identity Resolution → Graph Write pipeline. No special handling needed.**
+**After extraction, events flow into the same Kafka → Consumer → Identity Resolution → Graph Write pipeline. The `confidence_score` is stored on the Event/Visit node and displayed in the UI as a badge.**
 
 ---
 
@@ -1643,19 +1710,36 @@ interface Alert {
 
 ### 10.2 Policy Drift Detection
 
+Uses `OVERRODE`/`DEVIATED_FROM` edges (not the `exception` flag) — these are the source of truth for exceptions and deviations.
+
+**Retail:**
 ```cypher
-// Find policies being overridden beyond threshold
-MATCH (e:Event {_tenant: $tenantId})-[:GOVERNED_BY]->(pol:Policy)
+MATCH (e:Event {_tenant: $tenantId})-[:OVERRODE]->(pol:Policy {status: 'active'})
 WHERE e.timestamp >= datetime() - duration("P90D")
-WITH pol, count(e) AS total_applications,
-     count(CASE WHEN e.exception = true THEN 1 END) AS exception_count
-WHERE total_applications >= 10
-WITH pol, total_applications, exception_count,
-     toFloat(exception_count) / total_applications AS override_rate
+WITH pol, count(e) AS overrides
+MATCH (e2:Event {_tenant: $tenantId})-[:GOVERNED_BY]->(pol)
+WHERE e2.timestamp >= datetime() - duration("P90D")
+WITH pol, overrides, count(e2) AS followed,
+     toFloat(overrides) / (overrides + count(e2)) AS override_rate
 WHERE override_rate > $threshold  // default 0.3
-RETURN pol.name AS policy, pol.version AS version,
-       override_rate, total_applications, exception_count
+RETURN pol.name AS policy, pol.version AS version, pol.status AS status,
+       override_rate, overrides, overrides + followed AS total
 ORDER BY override_rate DESC
+```
+
+**Healthcare:**
+```cypher
+MATCH (v:Visit {_tenant: $tenantId})-[:DEVIATED_FROM]->(prot:Protocol {status: 'active'})
+WHERE v.timestamp >= datetime() - duration("P90D")
+WITH prot, count(v) AS deviations
+MATCH (v2:Visit {_tenant: $tenantId})-[:GOVERNED_BY]->(prot)
+WHERE v2.timestamp >= datetime() - duration("P90D")
+WITH prot, deviations, count(v2) AS followed,
+     toFloat(deviations) / (deviations + count(v2)) AS deviation_rate
+WHERE deviation_rate > $threshold
+RETURN prot.name AS protocol, prot.version AS version,
+       deviation_rate, deviations, deviations + followed AS total
+ORDER BY deviation_rate DESC
 ```
 
 ### 10.3 Risk Scoring (Churn / Readmission)
@@ -1747,7 +1831,7 @@ Computes live metrics from the graph for the value dashboard.
 
 ```typescript
 async function getStats(tenantId: string): Promise<DashboardStats> {
-  const [events, profiles, patterns, commitments, alerts] = await Promise.all([
+  const [events, profiles, patterns, commitments, alerts, confidence] = await Promise.all([
     // Total events
     runQuery(`MATCH (e:Event {_tenant: $t}) RETURN count(e) AS c UNION ALL
               MATCH (v:Visit {_tenant: $t}) RETURN count(v) AS c`, { t: tenantId }),
@@ -1762,9 +1846,16 @@ async function getStats(tenantId: string): Promise<DashboardStats> {
     // Active alerts
     runQuery(`MATCH (a:Alert {_tenant: $t, acknowledged: false})
               RETURN count(a) AS count`, { t: tenantId }),
+    // Average extraction confidence (LLM-extracted events only)
+    runQuery(`MATCH (e {_tenant: $t})
+              WHERE e.confidence_score IS NOT NULL
+              RETURN round(avg(e.confidence_score), 2) AS avg_confidence,
+                     count(e) AS total_scored`, { t: tenantId }),
   ]);
 
-  return { events, profiles, patterns, commitments, alerts };
+  return { events, profiles, patterns, commitments, alerts,
+           avg_extraction_confidence: confidence.avg_confidence,
+           total_scored_events: confidence.total_scored };
 }
 ```
 
@@ -1779,6 +1870,7 @@ async function getStats(tenantId: string): Promise<DashboardStats> {
   "commitments": { "open": 34, "fulfilled": 28, "breached": 6 },
   "alerts_active": 4,
   "policy_drift_detected": 1,
+  "avg_extraction_confidence": 0.86,
   "kafka_messages_processed": 2847,
   "kafka_messages_failed": 3
 }
@@ -1870,18 +1962,35 @@ Context:
 MATCH (p:Profile {profile_id: $profileId, _tenant: $tenantId})
       -[:PERFORMED|HAD_VISIT]->(e)
 OPTIONAL MATCH (e)-[:INVOLVES|DIAGNOSED_WITH]->(detail)
-OPTIONAL MATCH (e)-[:GOVERNED_BY]->(pol)
+OPTIONAL MATCH (e)-[:GOVERNED_BY|OVERRODE|DEVIATED_FROM]->(pol)
 OPTIONAL MATCH (e)-[:RESULTED_IN]->(o)
 WITH e, detail, pol, o,
-     duration.inDays(e.timestamp, datetime()).days AS age_days
-WITH e, detail, pol, o, age_days,
-     round(0.9 * exp(-0.01 * age_days) *
-       CASE WHEN pol IS NOT NULL AND pol.version = $currentVersion THEN 1.0 ELSE 0.5 END *
-       CASE WHEN o IS NOT NULL AND o.type IN ['Recovered','customer_retained'] THEN 1.0 ELSE 0.7 END
+     duration.inDays(e.timestamp, datetime()).days AS age_days,
+     COALESCE(e.confidence_score, 0.7) AS confidence
+WITH e, detail, pol, o, age_days, confidence,
+     round(confidence
+       * exp(-0.01 * age_days)
+       * CASE WHEN pol IS NULL THEN 1.0
+              WHEN pol.status = 'active' THEN 1.0
+              WHEN pol.status = 'superseded' THEN 0.1
+              WHEN pol.status = 'revoked' THEN 0.0
+              ELSE 0.5 END
+       * CASE WHEN o IS NULL THEN 0.7
+              WHEN o.type IN ['Recovered','customer_retained'] THEN 1.0
+              WHEN o.type IN ['Improved'] THEN 0.8
+              ELSE 0.3 END
      , 2) AS relevance
-RETURN e, detail, pol, o, relevance
+RETURN e, detail, pol, o, relevance, confidence
 ORDER BY relevance DESC
 LIMIT $limit
+```
+
+The response shape includes `confidence` per event:
+```json
+"recent_events": [
+  { "type": "return_initiated", "product": "Nike Air Max", "days_ago": 3, "relevance": 0.94, "confidence": 0.87 },
+  { "type": "purchase", "product": "Levis Jacket", "days_ago": 15, "relevance": 0.71, "confidence": 0.95 }
+]
 ```
 
 **Performance:** <100ms with Redis cache, <300ms without. Cache key = `agent-context:{profileId}`, TTL = 15 min, invalidated on new event for this profile.
@@ -2521,15 +2630,15 @@ Relevance is computed at query time, not stored (always fresh):
 // Add relevance score to every event/visit in search results
 WITH e,
      duration.inDays(e.timestamp, datetime()).days AS age_days,
-     CASE WHEN e.status = 'exception' THEN 0.9
-          WHEN e.status = 'completed' THEN 1.0
-          WHEN e.status = 'denied' THEN 0.5
-          ELSE 0.7 END AS base_confidence
-OPTIONAL MATCH (e)-[:GOVERNED_BY]->(pol:Policy)
+     COALESCE(e.confidence_score, 0.7) AS base_confidence
+// Falls back to 0.7 for structured/seed events without LLM extraction
+OPTIONAL MATCH (e)-[:GOVERNED_BY|OVERRODE|DEVIATED_FROM]->(pol)
 WITH e, age_days, base_confidence,
      CASE WHEN pol IS NULL THEN 1.0
-          WHEN pol.version = $currentVersion THEN 1.0
-          ELSE 0.1 END AS policy_currency
+          WHEN pol.status = 'active' THEN 1.0
+          WHEN pol.status = 'superseded' THEN 0.1
+          WHEN pol.status = 'revoked' THEN 0.0
+          ELSE 0.5 END AS policy_currency
 OPTIONAL MATCH (e)-[:RESULTED_IN]->(o:Outcome)
 WITH e, age_days, base_confidence, policy_currency,
      CASE WHEN o IS NULL THEN 0.7
@@ -2545,6 +2654,11 @@ RETURN e,
 ORDER BY relevance DESC
 ```
 
+**Key changes from previous version:**
+- `base_confidence` now reads from `e.confidence_score` (LLM extraction confidence) instead of deriving from `e.status`
+- `policy_currency` now uses `pol.status` field instead of string-matching `pol.version = $currentVersion`
+- Matches across `GOVERNED_BY`, `OVERRODE`, and `DEVIATED_FROM` edges
+
 ### 10.2 Integration with Search
 
 The Cypher generator appends the relevance computation to every search query. The graph mapper passes relevance scores to the frontend:
@@ -2554,7 +2668,7 @@ The Cypher generator appends the relevance computation to every search query. Th
 interface GraphNode {
   id: string;
   label: string;
-  properties: Record<string, unknown>;
+  properties: Record<string, unknown>;  // includes confidence_score (Event/Visit) and status (Policy/Protocol)
   relevance: number;  // 0-1 score
 }
 ```
@@ -2562,22 +2676,70 @@ interface GraphNode {
 ### 10.3 Frontend Rendering
 
 ```typescript
-// In ContextGraph.tsx — node style based on relevance
-const nodeStyle = (relevance: number) => ({
-  opacity: 0.3 + (relevance * 0.7),           // Low relevance = dimmed
-  transform: `scale(${0.8 + relevance * 0.4})`, // Low relevance = smaller
-  border: relevance > 0.8 ? '2px solid #10b981' : '1px solid #374151',
-});
+// In ContextGraph.tsx — node style uses BOTH relevance and confidence
+const nodeStyle = (node: GraphNode) => {
+  const relevance = node.relevance ?? 0.7;
+  const policyStatus = node.properties?.status as string;
 
-// Relevance badge on each node
-<div className="absolute -top-2 -right-2 bg-gray-800 text-xs px-1.5 py-0.5 rounded-full">
-  {(relevance * 100).toFixed(0)}
-</div>
+  return {
+    opacity: policyStatus === 'superseded' ? 0.35 : (0.3 + relevance * 0.7),
+    transform: `scale(${0.8 + relevance * 0.4})`,
+    border: relevance > 0.8
+      ? '2px solid #10b981'
+      : policyStatus === 'superseded'
+        ? '1px dashed #6b7280'
+        : '1px solid #374151',
+  };
+};
+
+// Confidence badge on Event/Visit nodes only
+{node.properties?.confidence_score != null && (
+  <div className="absolute -top-2 -left-2 bg-blue-900/80 text-blue-200 text-[10px] px-1.5 py-0.5 rounded-full font-mono">
+    {(node.properties.confidence_score * 100).toFixed(0)}%
+  </div>
+)}
+
+// Relevance badge on all nodes
+{node.relevance != null && (
+  <div className="absolute -top-2 -right-2 bg-gray-800 text-gray-300 text-[10px] px-1.5 py-0.5 rounded-full font-mono">
+    {(node.relevance * 100).toFixed(0)}
+  </div>
+)}
+
+// Policy/Protocol nodes with status=superseded get strikethrough + label
+{(node.label === 'Policy' || node.label === 'Protocol') && (
+  <div className={cn(
+    "text-xs",
+    node.properties?.status === 'superseded' && "line-through text-gray-500"
+  )}>
+    {node.properties?.name} {node.properties?.version}
+    {node.properties?.status === 'superseded' && (
+      <span className="ml-1 text-[10px] bg-yellow-900/50 text-yellow-400 px-1 rounded">superseded</span>
+    )}
+  </div>
+)}
 ```
 
 ### 10.4 Timeline Integration
 
-Timeline entries also show relevance. Filter control:
+Timeline entries show both relevance and confidence scores:
+```tsx
+<div className="flex items-center gap-2">
+  <span className="text-sm">{event.description}</span>
+  {event.confidence_score != null && event.confidence_score < 1.0 && (
+    <span className="text-[10px] text-blue-400 font-mono">
+      [{(event.confidence_score * 100).toFixed(0)}% conf]
+    </span>
+  )}
+  {event.relevance != null && (
+    <span className="text-[10px] text-gray-500 font-mono">
+      rel: {(event.relevance * 100).toFixed(0)}
+    </span>
+  )}
+</div>
+```
+
+Filter controls:
 ```
 [Show all] [High relevance (>0.7)] [Critical only (>0.9)]
 ```
@@ -2590,7 +2752,45 @@ Low-relevance timeline entries are collapsed by default with a "Show N older/low
 
 ### 8.1 Retail Seed (verticals/retail/seed.ts)
 
-50 users, 20 products, 5 agents, 4 policies. Same as previous LLD — Myntra-style journeys with embedded patterns (Nike sizing, EORS spike, Gold tier exceptions, COD-return correlation).
+50 users, 20 products, 5 agents, 4 policies. Myntra-style journeys with embedded patterns (Nike sizing, EORS spike, Gold tier exceptions, COD-return correlation).
+
+**Policy version history (NEW):**
+```typescript
+const policies = [
+  {
+    policy_id: 'return_policy_v3.1',
+    name: 'Return Policy',
+    version: 'v3.1',
+    rule_summary: '30-day return window, exceptions require manager approval',
+    effective_date: '2025-01-01',
+    status: 'superseded',  // OLD version
+  },
+  {
+    policy_id: 'return_policy_v3.2',
+    name: 'Return Policy',
+    version: 'v3.2',
+    rule_summary: '30-day return window, no exceptions',
+    effective_date: '2025-10-01',
+    status: 'active',      // CURRENT version
+  },
+];
+
+// Create SUPERSEDED_BY edge
+await runQuery(`
+  MATCH (old:Policy {policy_id: 'return_policy_v3.1', _tenant: $tenantId})
+  MATCH (new:Policy {policy_id: 'return_policy_v3.2', _tenant: $tenantId})
+  CREATE (old)-[:SUPERSEDED_BY]->(new)
+`, { tenantId });
+
+// ~10% of seeded events reference old v3.1 — these score lower (policy_currency = 0.1)
+```
+
+**Confidence scores on seeded events:**
+```typescript
+{ event_type: 'purchase', confidence_score: 1.0, ... }          // structured — deterministic
+{ event_type: 'return_initiated', confidence_score: 0.87, ... }  // LLM-extracted
+{ event_type: 'support_call', confidence_score: 0.92, ... }      // LLM-extracted
+```
 
 ### 8.2 Healthcare Seed (verticals/healthcare/seed.ts)
 
@@ -2614,6 +2814,42 @@ Low-relevance timeline entries are collapsed by default with a "Show N older/low
 | Dr. Mehta | Orthopedics | 40% claim denial rate (often skips pre-auth) |
 | Dr. Reddy | General Medicine | Aggressive medication switches |
 | Dr. Nair | Neurology | Consult wait time > 4 hours causing ER bottleneck |
+
+**Protocol version history (NEW):**
+```typescript
+const protocols = [
+  {
+    protocol_id: 'proto_stemi_v1.0',
+    name: 'Acute MI Protocol',
+    version: 'v1.0',
+    condition: 'STEMI',
+    standard_treatment: 'Thrombolysis within 60 min',
+    status: 'superseded',  // OLD — replaced by v2.1
+  },
+  {
+    protocol_id: 'proto_stemi_v2.1',
+    name: 'Acute MI Protocol',
+    version: 'v2.1',
+    condition: 'STEMI',
+    standard_treatment: 'Primary PCI within 90 min + 2-week follow-up angiogram',
+    status: 'active',
+  },
+];
+
+// Create SUPERSEDED_BY edge
+await runQuery(`
+  MATCH (old:Protocol {protocol_id: 'proto_stemi_v1.0', _tenant: $tenantId})
+  MATCH (new:Protocol {protocol_id: 'proto_stemi_v2.1', _tenant: $tenantId})
+  CREATE (old)-[:SUPERSEDED_BY]->(new)
+`, { tenantId });
+```
+
+**Confidence scores on seeded visits:**
+```typescript
+{ visit_type: 'Emergency', confidence_score: 0.95, ... }   // LLM-extracted
+{ visit_type: 'Follow-up', confidence_score: 0.78, ... }   // LLM-extracted
+{ visit_type: 'Inpatient', confidence_score: 1.0, ... }    // structured — deterministic
+```
 
 **Embedded patterns:**
 
