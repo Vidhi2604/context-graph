@@ -21,7 +21,7 @@ export async function generateCypher(
   limit: number = 50
 ): Promise<CypherResult> {
   const config = getVertical(vertical);
-  const prompt = buildPrompt(config, tenantId);
+  const prompt = buildPrompt(config);
 
   const raw = await chatCompletion(
     prompt,
@@ -39,10 +39,15 @@ export async function generateCypher(
       return { ...parsed, isValid: false, error: validation.error };
     }
 
-    // Ensure tenant filter is present
-    if (!parsed.cypher.includes(tenantId)) {
-      return { ...parsed, isValid: false, error: "Missing tenant filter" };
+    // Ensure tenant filter is present — check for _tenant property, not literal value
+    if (!parsed.cypher.includes("_tenant")) {
+      return { ...parsed, isValid: false, error: "Missing _tenant filter" };
     }
+
+    // Replace any placeholder with actual tenantId for execution
+    parsed.cypher = parsed.cypher
+      .replace(/\{tenantId\}/g, tenantId)
+      .replace(/\$tenantId/g, `"${tenantId}"`);
 
     return { ...parsed, isValid: true };
   } catch {
@@ -92,7 +97,9 @@ function validateCypher(cypher: string): { valid: boolean; error?: string } {
   return { valid: true };
 }
 
-function buildPrompt(config: VerticalConfig, tenantId: string): string {
+// tenantId is NOT embedded in prompt (security). LLM uses {tenantId} placeholder.
+// Replacement happens in generateCypher() after validation.
+function buildPrompt(config: VerticalConfig): string {
   const nodeSchemas = config.nodeTypes
     .map((n) => {
       const props = n.properties.map((p) => p.name).join(", ");
@@ -112,12 +119,12 @@ ${config.id === "retail" ? RETAIL_RELS : HEALTHCARE_RELS}
 
 IDENTITY RESOLUTION:
 - When searching by email/phone/device_id/mrn, match via Identity:
-  MATCH (i:Identity {value: $searchValue, _tenant: "${tenantId}"})<-[:HAS_IDENTITY]-(p:Profile)
+  MATCH (i:Identity {value: $searchValue, _tenant: "{tenantId}"})<-[:HAS_IDENTITY]-(p:Profile)
 - When searching by name/tier/city, match on Profile:
-  MATCH (p:Profile {_tenant: "${tenantId}"}) WHERE p.name CONTAINS $searchValue
+  MATCH (p:Profile {_tenant: "{tenantId}"}) WHERE p.name CONTAINS $searchValue
 
 IMPORTANT:
-- Every query MUST filter by _tenant = "${tenantId}"
+- Every query MUST filter by _tenant = "{tenantId}" (use this exact placeholder, it will be replaced)
 - Only use READ operations (MATCH, RETURN, WHERE, ORDER, LIMIT, OPTIONAL MATCH, WITH, UNWIND)
 - Always include LIMIT
 - Return full nodes for graph rendering

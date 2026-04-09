@@ -188,32 +188,46 @@ async function mergeProfiles(
   loserId: string,
   tenantId: string
 ): Promise<void> {
-  // Reparent all outgoing relationships from loser to winner
-  await runQuery(
-    `
-    MATCH (loser:Profile {profile_id: $loserId, _tenant: $tenantId})-[r]->(n)
-    MATCH (winner:Profile {profile_id: $winnerId, _tenant: $tenantId})
-    WITH winner, loser, r, n, type(r) AS relType, properties(r) AS relProps
-    CALL apoc.create.relationship(winner, relType, relProps, n) YIELD rel
-    DELETE r
-    `,
-    { winnerId, loserId, tenantId }
-  );
+  const params = { winnerId, loserId, tenantId };
+
+  // Reparent each known relationship type explicitly (no APOC needed)
+  // Retail relationships
+  for (const relType of ["PERFORMED", "HAD_VISIT", "HAS_SESSION", "HAS_COMMITMENT", "READMITTED"]) {
+    await runQuery(
+      `
+      MATCH (loser:Profile {profile_id: $loserId, _tenant: $tenantId})-[r:${relType}]->(n)
+      MATCH (winner:Profile {profile_id: $winnerId, _tenant: $tenantId})
+      CREATE (winner)-[:${relType}]->(n)
+      DELETE r
+      `,
+      params
+    ).catch((err) => {
+      // Expected for relationship types that don't exist in this vertical
+      console.debug(`Merge reparent skip: ${relType} — ${err.message}`);
+    });
+  }
 
   // Move identities
   await runQuery(
     `
-    MATCH (loser:Profile {profile_id: $loserId, _tenant: $tenantId})<-[r:HAS_IDENTITY]-(i:Identity)
+    MATCH (loser:Profile {profile_id: $loserId, _tenant: $tenantId})-[r:HAS_IDENTITY]->(i:Identity)
     MATCH (winner:Profile {profile_id: $winnerId, _tenant: $tenantId})
+    MERGE (winner)-[:HAS_IDENTITY]->(i)
     DELETE r
-    CREATE (winner)-[:HAS_IDENTITY]->(i)
     `,
-    { winnerId, loserId, tenantId }
+    params
   );
 
-  // Delete loser profile
+  // Tombstone loser profile — never hard delete (audit trail)
   await runQuery(
-    `MATCH (p:Profile {profile_id: $loserId, _tenant: $tenantId}) DELETE p`,
-    { loserId, tenantId }
+    `
+    MATCH (loser:Profile {profile_id: $loserId, _tenant: $tenantId})
+    MATCH (winner:Profile {profile_id: $winnerId, _tenant: $tenantId})
+    SET loser.archived = true,
+        loser.merged_into = $winnerId,
+        loser.archived_at = datetime()
+    CREATE (loser)-[:MERGED_INTO {merged_at: datetime()}]->(winner)
+    `,
+    params
   );
 }

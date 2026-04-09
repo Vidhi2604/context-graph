@@ -60,14 +60,20 @@ async function handleBasicSearch(
   tenantId: string,
   vertical: ReturnType<typeof getVertical>
 ) {
+  // Also search Identity values (phone, email, mrn) for basic search
   const records = await runQuery(
     `
     MATCH (p:Profile {_tenant: $tenantId})
     WHERE p.name CONTAINS $query OR p.profile_id CONTAINS $query
+    WITH p
+    UNION
+    MATCH (i:Identity {_tenant: $tenantId})<-[:HAS_IDENTITY]-(p:Profile {_tenant: $tenantId})
+    WHERE i.value CONTAINS $query
+    WITH p
+    WITH DISTINCT p LIMIT 25
     OPTIONAL MATCH (p)-[r]-(connected)
-    WHERE connected._tenant = $tenantId
+    WHERE connected._tenant = $tenantId OR connected._tenant IS NULL
     RETURN p, r, connected
-    LIMIT 25
     `,
     { query, tenantId }
   );

@@ -40,13 +40,16 @@ export async function createCommitment(
     }
   );
 
-  // Link to source event if provided
+  // Link to source event/visit if provided (try both labels)
   if (sourceEventId) {
     await runQuery(
       `
-      MATCH (e {id: $eventId, _tenant: $tenantId})
+      OPTIONAL MATCH (ev:Event {id: $eventId, _tenant: $tenantId})
+      OPTIONAL MATCH (vi:Visit {visit_id: $eventId, _tenant: $tenantId})
+      WITH COALESCE(ev, vi) AS source
+      WHERE source IS NOT NULL
       MATCH (c:Commitment {commitment_id: $commitmentId, _tenant: $tenantId})
-      CREATE (e)-[:CREATED_COMMITMENT]->(c)
+      CREATE (source)-[:CREATED_COMMITMENT]->(c)
       `,
       { eventId: sourceEventId, commitmentId, tenantId }
     );

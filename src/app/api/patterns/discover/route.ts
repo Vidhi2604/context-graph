@@ -56,7 +56,12 @@ export async function POST(req: NextRequest) {
       { jsonMode: true }
     );
 
-    const parsed = JSON.parse(raw);
+    let parsed: { patterns?: { summary?: string; recommendation?: string }[] } = {};
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      // LLM returned invalid JSON — fall back to auto-generated summaries
+    }
 
     const patterns = clusters.map((c, i) => ({
       cluster_id: i + 1,

@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomBytes } from "crypto";
 import { prisma } from "@/lib/prisma";
 import { initSchema } from "@/lib/neo4j";
 import { getVertical } from "@/verticals/registry";
 import { errorResponse } from "@/lib/api-auth";
+
+function generateApiKey(tenantId: string): string {
+  const hex = randomBytes(16).toString("hex");
+  return `sk_${tenantId}_${hex}`;
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -15,9 +21,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Create org
+    // Create org with proper API key format
+    const tenantId = randomBytes(12).toString("hex");
+    const apiKey = generateApiKey(tenantId);
+
     const org = await prisma.org.create({
-      data: { name, vertical },
+      data: { name, vertical, tenantId, apiKey },
     });
 
     // Add creator as owner

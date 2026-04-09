@@ -51,7 +51,7 @@ model Org {
   vertical  String
   plan      String      @default("starter")
   tenantId  String      @unique @default(cuid())
-  apiKey    String      @unique @default(cuid())
+  apiKey    String?     @unique
   seeded    Boolean     @default(false)
   members   OrgMember[]
   createdAt DateTime    @default(now())

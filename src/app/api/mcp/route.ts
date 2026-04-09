@@ -41,8 +41,7 @@ async function handleToolCall(
 
   switch (params.name) {
     case "get_context": {
-      const qs = new URLSearchParams(params.arguments as Record<string, string>).toString();
-      const res = await fetch(`${baseUrl}/api/agent/context?${qs}`, { headers });
+      const res = await fetch(`${baseUrl}/api/agent/context`, { method: "POST", headers, body: JSON.stringify(params.arguments) });
       return NextResponse.json(await res.json());
     }
     case "search": {

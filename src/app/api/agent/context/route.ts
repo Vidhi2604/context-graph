@@ -4,24 +4,29 @@ import { runQuery } from "@/lib/neo4j";
 import { chatCompletion } from "@/lib/groq";
 import { getCommitments } from "@/lib/commitment-tracker";
 
-export async function GET(req: NextRequest) {
+// POST instead of GET — PII (phone, email, mrn) should not be in URL params
+export async function POST(req: NextRequest) {
   try {
     const session = await getOrgFromRequest(req);
-    const params = req.nextUrl.searchParams;
+    const body = await req.json();
 
-    // Resolve profile from any identifier
-    const profileId = await resolveFromParams(params, session.tenantId);
+    // Resolve profile from any identifier in the body
+    const profileId = await resolveFromBody(body, session.tenantId);
     if (!profileId) {
       return NextResponse.json({ error: "Profile not found" }, { status: 404 });
     }
 
     // Run all queries in parallel
-    const [profile, recentEvents, commitments, exceptions] = await Promise.all([
+    const [profile, recentEvents, commitments, exceptions, similarCases] = await Promise.all([
       getProfile(profileId, session.tenantId),
       getRecentEvents(profileId, session.tenantId, session.vertical),
       getCommitments(session.tenantId, profileId),
       getExceptions(profileId, session.tenantId, session.vertical),
+      findSimilarProfiles(profileId, session.tenantId, session.vertical),
     ]);
+
+    // Compute risk score
+    const riskScore = computeRiskScore(recentEvents, commitments, session.vertical);
 
     // Build risk signals
     const riskSignals = buildRiskSignals(recentEvents, commitments);
@@ -38,6 +43,8 @@ export async function GET(req: NextRequest) {
         c.status === "open" || c.status === "breached"
       ),
       active_exceptions: exceptions,
+      similar_cases: similarCases,
+      risk_score: riskScore,
       risk_signals: riskSignals,
       suggested_actions: suggestedActions,
     });
@@ -46,18 +53,18 @@ export async function GET(req: NextRequest) {
   }
 }
 
-async function resolveFromParams(
-  params: URLSearchParams,
+async function resolveFromBody(
+  body: Record<string, string>,
   tenantId: string
 ): Promise<string | null> {
   // Try direct profile_id
-  const profileId = params.get("profile_id");
+  const profileId = body.profile_id;
   if (profileId) return profileId;
 
   // Try identity lookup
   const identifierTypes = ["phone", "email", "mrn", "aadhaar", "device_id"];
   for (const key of identifierTypes) {
-    const value = params.get(key);
+    const value = body[key];
     if (value) {
       const result = await runQuery<{ profile_id: string }>(
         `
@@ -73,7 +80,7 @@ async function resolveFromParams(
   }
 
   // Try name search
-  const name = params.get("name") || params.get("q");
+  const name = body.name || body.q;
   if (name) {
     const result = await runQuery<{ profile_id: string }>(
       `
@@ -159,6 +166,81 @@ function buildRiskSignals(
   if (returns.length >= 2) signals.push(`${returns.length} returns/readmissions recently`);
 
   return signals;
+}
+
+async function findSimilarProfiles(
+  profileId: string, tenantId: string, vertical: string
+): Promise<{ profile: string; similarity: number; outcome: string }[]> {
+  const relType = vertical === "retail" ? "PERFORMED" : "HAD_VISIT";
+  const detailRel = vertical === "retail" ? "INVOLVES" : "DIAGNOSED_WITH";
+
+  try {
+    const results = await runQuery<{
+      name: string; shared_count: number; outcome_type: string;
+    }>(
+      `
+      MATCH (source:Profile {profile_id: $profileId, _tenant: $tenantId})
+            -[:${relType}]->(e)-[:${detailRel}]->(shared)
+      WITH source, collect(DISTINCT shared) AS connections
+      UNWIND connections AS conn
+      MATCH (other:Profile {_tenant: $tenantId})-[:${relType}]->(e2)-[:${detailRel}]->(conn)
+      WHERE other.profile_id <> source.profile_id AND other.archived IS NULL
+      WITH other, count(DISTINCT conn) AS shared_count
+      ORDER BY shared_count DESC LIMIT 3
+      OPTIONAL MATCH (other)-[:${relType}]->(lastEvt)-[:RESULTED_IN]->(o)
+      RETURN other.name AS name, shared_count,
+             COALESCE(o.type, 'unknown') AS outcome_type
+      `,
+      { profileId, tenantId }
+    );
+
+    return results.map((r) => ({
+      profile: r.name || "Unknown",
+      similarity: Math.min(r.shared_count / 5, 1.0),
+      outcome: r.outcome_type,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function computeRiskScore(
+  events: Record<string, unknown>[],
+  commitments: Record<string, unknown>[],
+  vertical: string
+): number {
+  let score = 0;
+
+  const breached = commitments.filter((c) => c.status === "breached").length;
+  score += breached * 0.15;
+
+  if (vertical === "retail") {
+    const returns = events.filter((e) =>
+      (e as Record<string, unknown>).event_type === "return_initiated"
+    ).length;
+    const purchases = events.filter((e) =>
+      (e as Record<string, unknown>).event_type === "purchase"
+    ).length;
+    if (purchases > 0) score += (returns / purchases) * 0.3;
+    const escalations = events.filter((e) =>
+      (e as Record<string, unknown>).event_type === "support_ticket"
+    ).length;
+    score += escalations * 0.1;
+  } else {
+    // Healthcare: readmission risk
+    const readmissions = events.filter((e) => {
+      const props = e as Record<string, unknown>;
+      return props.type === "Emergency" || props.event_type === "readmission";
+    }).length;
+    score += readmissions * 0.2;
+
+    const missedFollowups = commitments.filter((c) =>
+      c.status === "breached" && String(c.promise || "").toLowerCase().includes("follow")
+    ).length;
+    score += missedFollowups * 0.25;
+  }
+
+  return Math.min(Math.round(score * 100) / 100, 1.0);
 }
 
 async function generateActions(

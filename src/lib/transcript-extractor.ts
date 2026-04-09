@@ -35,10 +35,16 @@ export async function extractFromTranscript(
   vertical: string
 ): Promise<ExtractedData> {
   const transcriptText = transcript.transcript
+    .filter((t) => t && t.speaker && t.text) // null safety
     .map((t) => `${t.speaker}: ${t.text}`)
     .join("\n");
 
+  if (!transcriptText) {
+    return { identifiers: {}, profile_data: {}, events: [], commitments: [], sentiment: { trajectory: "unknown", score: 0.5 } };
+  }
+
   const participantInfo = transcript.participants
+    ?.filter((p) => p && p.role)
     ?.map((p) => `${p.role}: ${p.name || "unknown"} ${p.phone ? `(${p.phone})` : ""} ${p.agent_id ? `[${p.agent_id}]` : ""}`)
     .join(", ") || "";
 

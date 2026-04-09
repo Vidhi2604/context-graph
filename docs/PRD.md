@@ -26,7 +26,7 @@ No existing system answers these questions across verticals. ContextMesh solves 
 - $80B in contact center labor costs displaced by AI in 2026 (Gartner), yet 48% of AI deployments fail due to integration/context problems
 - Hospital readmission penalties cost $500M+/year in US Medicare alone — and root causes are invisible in current EHR systems
 - AI agents handle routine queries but fail on exceptions because they lack institutional memory
-- Graph databases (Neo4j) and LLMs (Groq) are now fast and cheap enough to make real-time decision intelligence practical
+- Graph databases (Neo4j) and LLMs (Claude Haiku + Sonnet) are now fast and cheap enough to make near-near-real-time decision intelligence (<6s end-to-end) practical (events queryable within 6 seconds of ingestion)
 
 ---
 
@@ -63,7 +63,7 @@ No existing system answers these questions across verticals. ContextMesh solves 
 │  │              SHARED CORE ENGINE                         │  │
 │  │                                                         │  │
 │  │  Kafka Pipeline · Identity Resolution · Neo4j Graph     │  │
-│  │  Vector Search · Graph Algorithms · Groq LLM            │  │
+│  │  Vector Search · Graph Algorithms · Claude LLM (Haiku + Sonnet)            │  │
 │  │  Transcript Extraction · Relevance Scoring              │  │
 │  │  Commitment Tracker · Alert Engine                      │  │
 │  └──────────────┬──────────────────┬──────────────────────┘  │
@@ -266,11 +266,11 @@ Any identifier resolves to the same Profile:
 
 ```
 Search: "9876543210"
-  → MATCH (i:Identity {value: "9876543210"})-[:BELONGS_TO]->(p:Profile)
+  → MATCH (i:Identity {value: "9876543210"})<-[:HAS_IDENTITY]-(p:Profile)
   → Returns Priya's full graph
 
 Search: "priya@gmail.com"
-  → MATCH (i:Identity {value: "priya@gmail.com"})-[:BELONGS_TO]->(p:Profile)
+  → MATCH (i:Identity {value: "priya@gmail.com"})<-[:HAS_IDENTITY]-(p:Profile)
   → Returns same Priya, same graph
 
 Search: "Priya"
@@ -475,7 +475,7 @@ Mar W4 ── 50 visits, 14 procedures, 3 readmissions
   POST /api/events      POST /api/events/        POST /api/events/batch
                               transcript
        │                         │                         │
-       │                    Groq LLM extracts              │
+       │                    Claude Haiku extracts           │
        │                    structured events               │
        │                         │                         │
        └─────────────────────────┼─────────────────────────┘
@@ -561,6 +561,71 @@ All endpoints scoped to tenant via auth token.
 - Multiple events extracted from a single conversation (support call + return + commitment)
 - Sentiment tracked as a property on the call event
 - Works for both retail and healthcare transcripts
+
+### F7b: Connector Integration Layer (HubSpot · Zendesk · Nurix)
+**Three pre-built adapters that pull external data into the context graph. Each connector maps source-native payloads into the standard ContextMesh event schema — everything downstream (identity resolution, graph write, commitment extraction) is unchanged.**
+
+```
+HubSpot (CRM)   ──────┐
+                       │   ┌─────────────────┐   ┌──────────────────┐
+Zendesk (Support) ─────┼──▶│  Adapter Layer  │──▶│  /api/events     │──▶ Existing Pipeline
+                       │   │  (per-source    │   │  (Zod → Kafka →  │
+Nurix (Voice)    ──────┘   │   transform)    │   │   Graph Write)   │
+                           └─────────────────┘   └──────────────────┘
+
+Webhook receivers:
+  POST /api/ingest/hubspot
+  POST /api/ingest/zendesk
+  POST /api/ingest/nurix
+
+Pull sync:
+  POST /api/connectors/sync
+```
+
+#### HubSpot CRM
+Maps contacts, deals, and tickets into the event pipeline. Lifecycle stage maps to customer tier (lead → Bronze, customer → Gold, evangelist → Platinum). Contact email + phone become strong identity anchors for cross-source resolution.
+
+| HubSpot Object | ContextMesh Event | Key Data |
+|---|---|---|
+| Contact (modified) | `contact_updated` | email, phone, name, city, tier (from lifecycle) |
+| Deal (stage change) | `deal_stage_changed` / `deal_won` | deal value, stage, associated contact |
+| Ticket (created/updated) | `support_ticket` / `ticket_closed` | subject, priority, associated contact |
+
+#### Zendesk Support
+Maps tickets, comments, audits, and CSAT ratings into decision traces. Agent assignments map to `Agent` nodes. Priority escalations emit dedicated `ticket_escalated` events for the alert engine to detect.
+
+| Zendesk Object | ContextMesh Event | Key Data |
+|---|---|---|
+| Ticket (new/solved) | `ticket_created` / `ticket_resolved` | subject, priority, channel, satisfaction |
+| Comment (agent/customer) | `agent_reply` / `customer_reply` | content, author, public/private |
+| Audit (escalation) | `ticket_escalated` | from/to priority, changed by |
+| Satisfaction rating | `satisfaction_rated` | score, comment |
+
+#### Nurix Voice (Hackathon: Sample Data)
+Maps AI call center logs into support events. The full transcript is stored on the Event node; optionally piped through the LLM extraction pipeline (Section F7a) for deeper entity/commitment extraction.
+
+**Hackathon approach:** Live Nurix API integration is deferred (call logs require internal decryption access). Instead, 8 realistic sample call transcripts are pre-loaded as fixtures and triggered during seed loading or via a "Load Sample Calls" button in the dashboard.
+
+| Sample Call | Caller | Pattern Created |
+|---|---|---|
+| Call 1 | Priya M. | Return escalation → links to HubSpot + Zendesk profile via phone |
+| Call 2 | Priya M. | Commitment "refund within 48h" — will breach |
+| Call 3 | Amit K. | AI-resolved, positive sentiment |
+| Call 4-8 | Various | COD wrong item, loyalty complaint, dropped call (churn risk), repeat escalation |
+
+Phone numbers match HubSpot and Zendesk test data — identity resolution merges all three sources into unified profiles automatically.
+
+**Cross-source identity resolution:** When HubSpot (email), Zendesk (email), and Nurix (phone) all reference the same person, the identity resolver merges them into a single Profile with 3+ Identity nodes and a unified event timeline spanning all three sources.
+
+**Acceptance criteria:**
+- HubSpot webhook receiver accepts subscription events and maps to ContextMesh events
+- Zendesk webhook receiver accepts trigger payloads and maps to ContextMesh events
+- Nurix adapter loads 8 sample calls and POSTs them through the ingestion pipeline
+- Cross-source identity resolution links records from all three sources into unified profiles
+- Connector sync API (`POST /api/connectors/sync`) triggers pull from any configured source
+- All connector events appear on the same timeline as structured and transcript events
+
+---
 
 ### F8: Agent Integration Layer (Side A)
 **Any external AI agent or application connects to ContextMesh through three interfaces — same data, same auth, pick your protocol.**
@@ -685,7 +750,7 @@ await cm.track('return_initiated', { product: 'Nike Air Max', reason: 'size' });
 }
 ```
 
-**How suggested_actions works:** Groq LLM receives the assembled context and generates 2-3 specific, actionable suggestions. Not generic — tailored to THIS customer's history.
+**How suggested_actions works:** Claude Sonnet receives the assembled context and generates 2-3 specific, actionable suggestions. Not generic — tailored to THIS customer's history.
 
 **Post-Conversation Trace Commit:**
 Already handled by `/api/events/transcript` — after a call ends, STT output hits any of the 3 interfaces, Kafka pipeline processes it into the graph.
@@ -772,7 +837,7 @@ The current dashboard (`/dashboard`) has search + graph + timeline + insights. S
 **"Find similar" button on any Profile, Event, or Visit node.** Uses Neo4j's built-in vector index to find semantically similar journeys, not just keyword matches.
 
 **How it works:**
-1. Every Profile's journey is embedded as a vector (via Groq embedding or sentence-transformer)
+1. Every Profile's journey is embedded as a vector (via @xenova/transformers — runs locally, no API cost)
 2. Vectors stored in Neo4j's native vector index (since v5.11)
 3. User clicks "Find Similar" on a node → vector similarity search returns top matches
 4. Results rendered as a comparison graph — original node + similar nodes + what they have in common
@@ -1017,6 +1082,67 @@ Displayed as a summary bar at the top of the dashboard or as a dedicated `/analy
 
 ---
 
+### F17: Pipeline Trace Panel (Debug / Demo Mode)
+**A toggleable panel that exposes every backend step in real time — for demos, debugging, and showing judges the engine behind the output.**
+
+Click the **[🔬 Debug]** toggle in the dashboard header. A panel slides in from the right and auto-updates on every action (search, event ingestion, insight, connector sync). When the toggle is off, overhead is zero — the tracer is not instantiated.
+
+**What it shows for a search query:**
+```
+🔍 Search: "Gold tier returns in Bangalore"  •  997ms  •  ✅
+│
+├─ 1. Auth & Tenant Resolution     2ms   ✅  auth
+│     fn: requireTenant()
+│     → tenant_abc, vertical: retail, plan: enterprise
+│
+├─ 2. Vertical Schema Load         1ms   ✅  validation
+│     fn: getVertical("retail")
+│     → 8 node types, 12 relationships
+│
+├─ 3. LLM Cypher Generation      847ms  ✅  llm
+│     fn: generateCypher()  •  llama-3.3-70b  •  1,240 tokens
+│     → MATCH (p:Profile {tier:"Gold"...  confidence: 0.91
+│     ▶ Expand to see full Cypher + prompt
+│
+├─ 4. Cypher Validation            3ms   ✅  validation
+│     → read_only: true, tenant_filter: true
+│
+├─ 5. Neo4j Execution            124ms  ✅  neo4j
+│     → 23 rows, 18 nodes, 31 relationships
+│
+├─ 6. Graph Mapping                8ms   ✅  mapping
+│     → 18 nodes, 31 edges
+│
+└─ 7. Relevance Scoring           12ms  ✅  scoring
+      → avg: 0.78, max: 0.94, min: 0.23
+```
+
+**Also traces:** event ingestion (adapter → Zod → identity resolution → graph write → commitment extraction → embedding), connector sync (test → pull → pipeline → identity summary), and LLM insight (context → reasoning → result).
+
+**Layer color coding:**
+| Layer | Color | What It Covers |
+|---|---|---|
+| `auth` | Gray | Session, tenant resolution, API key |
+| `validation` | Blue | Zod, Cypher validation, schema load |
+| `llm` | Purple | Claude — Haiku (extraction), Sonnet (reasoning) |
+| `neo4j` | Green | Graph reads, writes, identity resolution |
+| `mapping` | Orange | Adapter transforms, Neo4j→ReactFlow |
+| `scoring` | Teal | Relevance, risk, confidence |
+
+**Duration bar** at the bottom of the panel shows proportional time per step, color-coded by layer — makes the LLM bottleneck instantly visible vs Neo4j.
+
+Each step is collapsible — click to expand full input/output JSON.
+
+**Acceptance criteria:**
+- Toggle button in dashboard header
+- Panel slides in from right, auto-updates per action
+- Each step shows: name, function name, layer, duration, status, input/output summary
+- Steps are collapsible — expand shows full JSON
+- Duration bar visualization, color-coded by layer
+- Toggle off = zero overhead on all API routes
+
+---
+
 ## 6. Tech Stack
 
 ### Hackathon Stack (Current)
@@ -1029,7 +1155,7 @@ Displayed as a summary bar at the top of the dashboard or as a dedicated `/analy
 | **Graph Visualization** | React Flow | Best open-source graph UI. Interactive, draggable, zoomable. No license cost. | Same — or upgrade to Cytoscape.js for 10K+ node graphs |
 | **Graph Database** | Neo4j (Aura free tier) | Only graph DB with native vector search + graph algorithms (GDS) + full-text search in one database. Free tier: 200K nodes. Neptune can't do vector + algorithms. | Neo4j AuraDB Pro ($65/mo) or self-hosted on K8s |
 | **Event Streaming** | Upstash Kafka (serverless) | Real Kafka with REST API — no brokers to manage, no Docker needed. Free tier: 10K msgs/day. | Confluent Cloud or Strimzi on Kubernetes |
-| **LLM** | Groq (llama-3.3-70b-versatile) | Fastest inference (sub-500ms). Free tier: 30 req/min, 14K/day. Good enough for hackathon volume. | Anthropic API (Claude Sonnet) for extraction — better reasoning. Multi-provider routing: Claude for complex, Groq for speed, self-hosted SLM for high-volume classification. |
+| **LLM** | Anthropic API — `claude-haiku-4-5` (extraction) + `claude-sonnet-4-6` (reasoning/synthesis) | Haiku: fast structured extraction from transcripts. Sonnet: complex reasoning, agent context, pattern summaries. Company API key — no cost. | Add self-hosted SLM for >100K events/day volume. |
 | **App Database** | SQLite (via Prisma) | Zero setup — just a file. Handles users, orgs, plans. Perfect for hackathon. | PostgreSQL (AWS RDS or K8s operator) |
 | **Validation** | Zod | Runtime schema validation at API boundary. TypeScript-native. | Same — production-ready |
 | **Language** | TypeScript | End-to-end type safety. Same language frontend + backend. | Same |
@@ -1041,7 +1167,7 @@ Displayed as a summary bar at the top of the dashboard or as a dedicated `/analy
 
 **Neo4j over AWS Neptune:** Neptune can't do vector search (needs separate OpenSearch), can't do graph algorithms (no GDS), can't deploy on-prem, and uses a limited subset of Cypher. Neo4j does all of these natively in one database.
 
-**Groq over OpenAI/Anthropic (for hackathon):** Groq's free tier is the most generous for our use case — 30 requests/minute is enough for demo + development. Response time is sub-500ms which makes the demo snappy. In production, we'd switch to Claude Sonnet for better extraction quality and add multi-provider routing.
+**Claude (Haiku + Sonnet) via company API:** Two-tier model strategy — Haiku handles high-volume structured extraction (fast, cost-efficient), Sonnet handles complex reasoning and synthesis (higher quality). Both available via company Anthropic API key at no personal cost. Haiku extraction latency is sub-500ms; Sonnet reasoning under 2s.
 
 **Upstash Kafka over direct API → DB:** Even for a hackathon, Kafka gives us: decoupled ingestion (API responds instantly), durability (events survive crashes), replay (reprocess if schema changes). Upstash makes this free and simple — REST API, no Kafka client library needed.
 
@@ -1070,7 +1196,7 @@ Displayed as a summary bar at the top of the dashboard or as a dedicated `/analy
 │  └──────────────────────┬───────────────────────────────────┘  │
 │                         ▼                                       │
 │  ┌─────────────────┐  ┌──────────┐  ┌──────────────────────┐  │
-│  │  Cypher Generator│  │  Groq    │  │  Neo4j (Aura)        │  │
+│  │  Cypher Generator│  │  Claude  │  │  Neo4j (Aura)        │  │
 │  │  (LLM → query)  │──│  LLM API │  │  Graph DB + Vector   │  │
 │  └─────────────────┘  └──────────┘  │  Tenant-scoped       │  │
 │                                      └───────────┬──────────┘  │
@@ -1142,9 +1268,41 @@ Graph updated, searchable immediately
 ### Query Flow
 ```
 Search Bar → POST /api/search (tenant-scoped)
-→ Load org's vertical schema → Send to Groq
+→ Load org's vertical schema → Send to Claude Haiku
 → Cypher generated → Validated → Execute against tenant graph
 → Results → Graph + Timeline + Optional Insight
+```
+
+### Connector Sync Flow
+```
+Webhook (HubSpot/Zendesk/Nurix event fires)
+    │
+    ▼
+POST /api/ingest/{source}
+    │
+    ├─ Adapter.mapWebhook(payload)
+    │  → source-native format → ContextMeshEvent
+    │
+    ├─ POST /api/events (internally)
+    │  → Zod validate → Produce to Kafka
+    │
+    ▼
+Same Kafka → Consumer → Identity Resolution → Graph Write
+    │
+    ▼
+Cross-source profile unified (HubSpot + Zendesk + Nurix → 1 Profile)
+```
+
+Or pull mode:
+```
+POST /api/connectors/sync { type: "zendesk", since: "..." }
+    │
+    ├─ Adapter.sync(config, since) → fetch from source API
+    ├─ Map all records → ContextMeshEvents[]
+    ├─ POST /api/events/batch
+    │
+    ▼
+Same pipeline as above
 ```
 
 ---
@@ -1188,13 +1346,23 @@ Search Bar → POST /api/search (tenant-scoped)
 - Show API: POST /api/events → any hospital system can push events
 - Show MCP config: one JSON block, any AI agent gets full context
 
+**6. Connector + Trace Demo (1 min)**
+- Click "Load Sample Calls" → 8 Nurix call transcripts ingested
+- Search: `"Priya"` → now shows HubSpot deal + Zendesk ticket + Nurix call on the same timeline
+- Toggle [🔬 Debug] → Pipeline Trace Panel slides in
+- Search again → panel shows every step live: Auth (2ms) → LLM Cypher (847ms) → Neo4j (124ms) → Relevance scoring (12ms)
+- Expand the LLM step → show full Cypher + confidence score
+- "Judges can see the engine, not just the output"
+
 ### Key Talking Points
 - "One platform. Two verticals. Same search bar. Same graph engine."
 - "Retail: why did this return happen? Healthcare: why was this patient readmitted?"
 - "Every AI insight shows its reasoning — context, logic chain, conclusion. Fully auditable."
 - "Every extraction has a confidence score. In production, low-confidence extractions go to human review — building a training flywheel."
 - "Stale precedents don't poison the graph — superseded policies are tracked and decayed automatically."
-- "Not a demo. Production-ready: auth, multi-tenant, plan tiers, API, MCP."
+- "HubSpot, Zendesk, and Nurix all feed into the same graph — identity resolution links them into one unified customer profile."
+- "Toggle one button and see every backend step — Auth, LLM, Neo4j, scoring — with timing and full I/O. This is what production observability looks like."
+- "Not a demo. Production-ready: auth, multi-tenant, plan tiers, API, MCP, connectors."
 - "Add any vertical — the graph engine is generic. Schema is the only thing that changes."
 
 ---
@@ -1278,7 +1446,7 @@ Plan selector in org settings. No payment — feature gating only for now.
 | LLM generates invalid Cypher | Search fails | Validate before execution; fallback to structured search |
 | Neo4j Aura free tier limits | Demo breaks | Keep dataset manageable; pre-cache common queries |
 | Graph too dense to visualize | UI confusion | Limit nodes to 50-100; progressive disclosure |
-| Groq latency spike | Slow demo | Cache responses for demo queries |
+| Claude latency spike | Slow demo | Cache responses for demo queries |
 | Healthcare data sensitivity concerns | Judges worried about HIPAA | All demo data is synthetic; production roadmap includes HIPAA compliance |
 | LLM extraction quality < 70% | Bad data in graph | Confidence scoring surfaces quality; production adds HITL review queue as quality gate |
 | Stale precedents mislead agents | Wrong recommendations | Relevance scoring with policy currency decay; superseded policies auto-deprioritized |
