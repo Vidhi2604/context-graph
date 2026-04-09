@@ -403,8 +403,8 @@ Mar W4 ── 50 visits, 14 procedures, 3 readmissions
     "data_points": ["4 of 5 returns cite 'size_runs_small'", "..."]
   },
   "reasoning": [
-    { "step": 1, "observation": "80% cite sizing issue", "implication": "Preventable return" },
-    { "step": 2, "observation": "Policy overridden 60% of time", "implication": "Policy drift" }
+    { "step": 1, "observation": "80% cite sizing issue", "implication": "Preventable return", "confidence": 0.92 },
+    { "step": 2, "observation": "Policy overridden 60% of time", "implication": "Policy drift", "confidence": 0.88 }
   ],
   "result": {
     "finding": "Nike Air Max has systemic sizing problem driving 34% returns",
@@ -432,17 +432,20 @@ Mar W4 ── 50 visits, 14 procedures, 3 readmissions
     {
       "step": 1,
       "observation": "Readmission within 18 days post-PCI with same symptom profile",
-      "implication": "Possible procedural complication or inadequate post-discharge follow-up"
+      "implication": "Possible procedural complication or inadequate post-discharge follow-up",
+      "confidence": 0.91
     },
     {
       "step": 2,
       "observation": "Protocol v2.1 mandates 2-week follow-up angiogram; none was scheduled",
-      "implication": "Protocol deviation — early detection of restenosis was missed"
+      "implication": "Protocol deviation — early detection of restenosis was missed",
+      "confidence": 0.94
     },
     {
       "step": 3,
       "observation": "3 other patients with same DES stent type had similar restenosis",
-      "implication": "Possible stent batch/type issue — not isolated to this patient"
+      "implication": "Possible stent batch/type issue — not isolated to this patient",
+      "confidence": 0.73
     }
   ],
   "result": {

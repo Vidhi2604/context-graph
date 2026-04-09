@@ -4,18 +4,6 @@
 
 ---
 
-# CHANGES FROM PREVIOUS LLD
-
-1. **Confidence scoring** — `confidence_score` added to Event/Visit node schemas, extraction pipeline, transcript extractor, graph mapper, and frontend rendering
-2. **Policy `status` + `SUPERSEDED_BY` edges** — Policy and Protocol nodes gain `status` (active/superseded/revoked), seed data includes version history, `SUPERSEDED_BY` relationship added
-3. **`OVERRODE` / `DEVIATED_FROM` edges** — distinguished from `GOVERNED_BY` for exception tracking
-4. **Relevance scoring formula** — updated to incorporate `policy_currency` from the `status` field and `e.confidence_score`, not version string matching
-5. **Seed data** — both verticals now include superseded policy/protocol versions with linked traces and confidence scores on events
-6. **Transcript extractor** — returns confidence per extracted event
-7. **Frontend** — confidence badges on nodes, relevance-based sizing, superseded-policy dimming
-
----
-
 ## 1. System Architecture
 
 ```
@@ -1106,15 +1094,97 @@ Event arrives
 
 ### 6.4 POST /api/insights — LLM Reasoning Chain
 
-Same as before but vertical-aware. The system prompt changes based on vertical:
+Vertical-aware. The system prompt changes based on vertical.
 
 **Retail insight prompt:** analyzes purchase patterns, return rates, policy drift, agent behavior
 **Healthcare insight prompt:** analyzes readmission causes, protocol adherence, treatment outcomes, claim patterns
 
+**Response structure (all LLM responses follow this pattern):**
+
+```json
+{
+  "context": {
+    "summary": "Analyzing 5 return events for Nike Air Max across Gold tier users",
+    "data_points": [
+      "4 of 5 returns cite 'size_runs_small'",
+      "3 returns were policy exceptions (Day 31-37, policy allows 30)",
+      "Agent Ravi approved all 3 exceptions",
+      "4 of 5 customers made another purchase within 60 days",
+      "Nike Air Max return rate: 34% vs 22% category average"
+    ],
+    "graph_scope": "5 Users, 8 Events, 3 Products, 1 Policy, 1 Agent"
+  },
+  "reasoning": [
+    {
+      "step": 1,
+      "observation": "80% of returns cite sizing as the issue, not product quality",
+      "implication": "Preventable return — better size guidance could reduce volume",
+      "confidence": 0.92
+    },
+    {
+      "step": 2,
+      "observation": "Policy v3.2 says 30 days, but 60% approved past that window",
+      "implication": "Written policy does not reflect actual practice for Gold tier",
+      "confidence": 0.88
+    },
+    {
+      "step": 3,
+      "observation": "Customers who received exceptions have 80% repeat purchase rate",
+      "implication": "Exceptions are driving retention — denying them loses long-term LTV",
+      "confidence": 0.79
+    }
+  ],
+  "result": {
+    "finding": "Nike Air Max has a systemic sizing problem driving 34% returns. Policy exceptions for Gold tier are effectively standard practice but undocumented.",
+    "recommendation": "1) Add size guide to Nike Air Max product page. 2) Formalize Gold tier exception to 45 days.",
+    "confidence": 0.87,
+    "impact": "Estimated 40% reduction in Nike returns, 15% reduction in agent decision time"
+  }
+}
+```
+
+**Confidence at every level:**
+- `reasoning[].confidence` — how confident the LLM is about each individual reasoning step (0-1)
+- `result.confidence` — overall confidence in the final conclusion (average of reasoning steps, weighted by data support)
+- Allows debugging: if overall confidence is low, check which reasoning step is weak
+
 **Plan gating:**
 - Starter: not available (403)
-- Pro: returns `result` only (finding + recommendation)
-- Enterprise: returns full `context → reasoning → result` chain
+- Pro: returns `result` only (finding + recommendation + confidence)
+- Enterprise: returns full `context → reasoning → result` chain with per-step confidence
+
+### 6.5 Consolidated LLM Response Formats
+
+Every LLM call in the system returns structured JSON with confidence scoring:
+
+| LLM Call | Endpoint | Response Shape | Confidence |
+|---|---|---|---|
+| **Insight / Analysis** | `POST /api/insights` | `{ context, reasoning[], result }` | Per reasoning step + overall |
+| **Transcript Extraction** | `POST /api/events/transcript` | `{ identifiers, profile_data, events[], commitments[], sentiment }` | Per extracted event + per commitment |
+| **Cypher Generation** | `POST /api/search` | Raw Cypher string + `{ cypher_confidence: 0.0-1.0 }` | How confident LLM is the Cypher is correct |
+| **Suggested Actions** | `GET /api/agent/context` | `{ suggested_actions[] }` | Per action confidence |
+
+**Cypher generation with confidence:**
+```json
+{
+  "cypher": "MATCH (p:Profile {tier: 'Gold'})...",
+  "cypher_confidence": 0.91,
+  "interpretation": "Searching for Gold tier customer return events with policy exceptions"
+}
+```
+If `cypher_confidence < 0.6`, system falls back to structured search instead of executing potentially wrong Cypher.
+
+**Suggested actions with confidence:**
+```json
+{
+  "suggested_actions": [
+    { "action": "Apologize for delayed refund — commitment breached 2 days ago", "confidence": 0.95 },
+    { "action": "Offer express processing (same-day refund) to retain Gold member", "confidence": 0.82 },
+    { "action": "Do NOT promise further deadlines until refund is confirmed in system", "confidence": 0.88 }
+  ]
+}
+```
+Actions below `confidence < 0.5` are not shown to the agent.
 
 ---
 
