@@ -8,9 +8,13 @@
 ┌──────────────────────────────────────────────────────────────────┐
 │                        CLIENT LAYER                               │
 │                                                                   │
+│  SIDE B CONSUMERS:           SIDE A CONSUMERS:     INGESTION:    │
 │  ┌──────────────┐  ┌──────────────┐  ┌────────────────────────┐  │
-│  │  Dashboard    │  │  JS SDK      │  │  REST API Consumers   │  │
-│  │  (Next.js)   │  │  (Browser)   │  │  (Any HTTP Client)    │  │
+│  │  Dashboard    │  │  AI Agents   │  │  JS SDK / Webhooks /  │  │
+│  │  (Next.js)   │  │  (via MCP or │  │  STT Services /       │  │
+│  │  Ops managers │  │  REST API)   │  │  CRM / EHR Systems    │  │
+│  │  Analysts     │  │  Human Agent │  │                        │  │
+│  │  Compliance   │  │  Copilot     │  │                        │  │
 │  └──────┬───────┘  └──────┬───────┘  └───────────┬────────────┘  │
 └─────────┼─────────────────┼──────────────────────┼───────────────┘
           │                 │                      │
@@ -18,7 +22,7 @@
 ┌──────────────────────────────────────────────────────────────────┐
 │                      AUTH LAYER (NextAuth.js)                     │
 │                                                                   │
-│  Google OAuth · Email/Password · Session JWT · Org Scope          │
+│  Google OAuth · Email/Password · Session JWT · API Key (MCP)      │
 └──────────────────────────────┬───────────────────────────────────┘
                                │
                                ▼
@@ -32,28 +36,37 @@
 ┌──────────────────────────────────────────────────────────────────┐
 │                      API LAYER (Next.js App Router)               │
 │                                                                   │
-│  ┌──────────────┐  ┌──────────────┐  ┌────────────────────────┐  │
-│  │ /api/auth    │  │ /api/search  │  │ /api/profiles/[id]     │  │
-│  │ /api/org     │  │ /api/events  │  │ /api/graph/explore     │  │
-│  │ /api/plan    │  │ /api/events  │  │ /api/insights          │  │
-│  │ /api/alerts  │  │   /batch     │  │ /api/patterns/discover │  │
-│  │ /api/stats   │  │              │  │ /api/search/similar    │  │
-│  └──────┬───────┘  └──────┬───────┘  └───────────┬────────────┘  │
-└─────────┼─────────────────┼──────────────────────┼───────────────┘
-          │                 │                      │
-          ▼                 ▼                      ▼
+│  SIDE A (Agent Memory):      SIDE B (Intelligence):              │
+│  ┌────────────────────────┐  ┌──────────────────────────────┐    │
+│  │ /api/agent/context     │  │ /api/search                  │    │
+│  │   Pre-conv brief       │  │ /api/search/similar          │    │
+│  │ /api/mcp               │  │ /api/graph/explore           │    │
+│  │   MCP Server (any AI   │  │ /api/insights                │    │
+│  │   agent framework)     │  │ /api/patterns/discover       │    │
+│  │ /api/events            │  │ /api/alerts                  │    │
+│  │ /api/events/transcript │  │ /api/stats                   │    │
+│  │ /api/events/batch      │  │ /api/profiles/[id]           │    │
+│  └───────────┬────────────┘  └──────────────┬───────────────┘    │
+│              │    SHARED:                    │                     │
+│              │    /api/auth · /api/org · /api/plan · /api/schema │
+│              │                               │                     │
+└──────────────┼───────────────────────────────┼───────────────────┘
+               │                               │
+               ▼                               ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │                      EVENT STREAMING LAYER                        │
 │                                                                   │
 │  ┌────────────────────────────────────────────────────────────┐  │
 │  │                  Upstash Kafka (Serverless)                 │  │
 │  │                                                             │  │
-│  │  Topic: events-{tenantId}                                   │  │
-│  │  Producers: /api/events, /api/events/batch, /api/events/transcript │  │
-│  │  Consumer: background event processor                       │  │
+│  │  Topic: events-{tenantId}    DLQ: events-{tenantId}-dlq    │  │
 │  │                                                             │  │
-│  │  Flow: API validates → produces to Kafka → API returns 202  │  │
-│  │        Consumer polls → identity resolution → graph write   │  │
+│  │  Producers:                  Consumer:                      │  │
+│  │  /api/events (structured)    Background event processor     │  │
+│  │  /api/events/batch           → Identity Resolution          │  │
+│  │  /api/events/transcript      → Graph Write                  │  │
+│  │    (LLM extract first)       → Commitment Extraction        │  │
+│  │                              → Embedding Generation         │  │
 │  └────────────────────────────────────────────────────────────┘  │
 └──────────────────────────────┬───────────────────────────────────┘
                                │
@@ -65,18 +78,25 @@
 │  │ Event        │  │ Query Engine │  │ Insight Engine         │  │
 │  │ Consumer     │  │ (LLM→Cypher)│  │ (LLM Reasoning Chain) │  │
 │  │ (Kafka→Neo4j)│  │              │  │                        │  │
-│  └──────┬───────┘  └──────┬───────┘  └───────────┬────────────┘  │
-│                                                                   │
-│  ┌──────────────┐  ┌──────────────┐  ┌────────────────────────┐  │
-│  │ Vertical     │  │ Tenant       │  │ Plan                   │  │
-│  │ Registry     │  │ Manager      │  │ Manager                │  │
-│  │ (schema map) │  │ (scoping)    │  │ (feature flags)        │  │
 │  └──────────────┘  └──────────────┘  └────────────────────────┘  │
 │                                                                   │
 │  ┌──────────────┐  ┌──────────────┐  ┌────────────────────────┐  │
-│  │ Identity     │  │ Commitment   │  │ Alert                  │  │
-│  │ Resolver     │  │ Tracker      │  │ Engine                 │  │
+│  │ Transcript   │  │ Identity     │  │ Relevance              │  │
+│  │ Extractor    │  │ Resolver     │  │ Scoring Engine         │  │
+│  │ (LLM→events)│  │ (3-tier)     │  │                        │  │
 │  └──────────────┘  └──────────────┘  └────────────────────────┘  │
+│                                                                   │
+│  ┌──────────────┐  ┌──────────────┐  ┌────────────────────────┐  │
+│  │ Vertical     │  │ Commitment   │  │ Alert                  │  │
+│  │ Registry     │  │ Tracker      │  │ Engine                 │  │
+│  │ (schema map) │  │              │  │ (drift, risk, anomaly) │  │
+│  └──────────────┘  └──────────────┘  └────────────────────────┘  │
+│                                                                   │
+│  ┌──────────────┐  ┌──────────────┐                              │
+│  │ Tenant       │  │ Plan         │                              │
+│  │ Manager      │  │ Manager      │                              │
+│  │ (scoping)    │  │ (feat flags) │                              │
+│  └──────────────┘  └──────────────┘                              │
 └──────────────────────────────┬───────────────────────────────────┘
                                │
                                ▼
@@ -85,15 +105,16 @@
 │                                                                   │
 │  ┌──────────────────────────┐  ┌──────────────────────────────┐  │
 │  │     Neo4j (Aura)         │  │     Groq LLM API            │  │
-│  │     Graph + Vector       │  │     llama-3.3-70b-versatile  │  │
-│  │     Tenant-scoped        │  │                              │  │
+│  │     Graph + Vector +     │  │     llama-3.3-70b-versatile  │  │
+│  │     Full-Text + GDS      │  │     (query gen + insights +  │  │
+│  │     Tenant-scoped        │  │      extraction + actions)   │  │
 │  └──────────────────────────┘  └──────────────────────────────┘  │
 │                                                                   │
-│  ┌──────────────────────────┐                                    │
-│  │     Upstash Kafka        │                                    │
-│  │     Event durability     │                                    │
-│  │     Replay capability    │                                    │
-│  └──────────────────────────┘                                    │
+│  ┌──────────────────────────┐  ┌──────────────────────────────┐  │
+│  │     Upstash Kafka        │  │     SQLite (Prisma)          │  │
+│  │     Event streaming      │  │     Users, Orgs, Plans,      │  │
+│  │     Durability + Replay  │  │     Sessions                 │  │
+│  └──────────────────────────┘  └──────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
