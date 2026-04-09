@@ -498,16 +498,108 @@ All endpoints scoped to tenant via auth token.
 - Sentiment tracked as a property on the call event
 - Works for both retail and healthcare transcripts
 
-### F8: Agent Context API (Side A)
-**A single API call that gives any AI agent or human agent everything they need before, during, and after a conversation.**
+### F8: Agent Integration Layer (Side A)
+**Any external AI agent or application connects to ContextMesh through three interfaces — same data, same auth, pick your protocol.**
 
-Side A is the "agent memory" product — consumed by AI bots and human agent copilots.
-
-**Pre-Conversation Brief:**
 ```
-GET /api/agent/context?phone=9876543210
+┌─────────────────────────────────────────────────────────┐
+│               EXTERNAL AI AGENTS / APPS                  │
+│                                                          │
+│  Claude, LangChain ──┐                                   │
+│  CrewAI, AutoGPT ────┤──▶ MCP Protocol (auto-discover)  │
+│  Any MCP agent ──────┘                                   │
+│                                                          │
+│  Custom bots ────────┐                                   │
+│  Backend services ───┤──▶ REST API (direct HTTP)         │
+│  Webhooks ───────────┘                                   │
+│                                                          │
+│  Python apps ────────┐                                   │
+│  Node.js apps ───────┤──▶ SDK (1-line setup)             │
+│  Any language ───────┘                                   │
+│                                                          │
+│  All three → same graph, same data, same auth            │
+└─────────────────────────────────────────────────────────┘
+```
 
-→ Returns in <100ms:
+#### Interface 1: MCP Server (Primary)
+**The main integration path.** AI agent frameworks connect, auto-discover available tools, and call them natively. Zero custom integration code.
+
+```
+MCP Endpoint: /api/mcp
+
+Available tools (auto-discovered by agent):
+┌────────────────┬──────────────────────────────────────────┐
+│ get_context    │ Full pre-conversation brief for a person │
+│ search         │ Natural language search across the graph │
+│ analyze        │ LLM insight with reasoning chain         │
+│ find_similar   │ Vector similarity search                 │
+│ track_event    │ Ingest a new event into the graph        │
+│ get_alerts     │ Active proactive alerts                  │
+│ get_commitments│ Open/breached commitments for a person   │
+└────────────────┴──────────────────────────────────────────┘
+```
+
+Any MCP-compatible agent connects in one config:
+```json
+{
+  "mcpServers": {
+    "contextmesh": {
+      "url": "https://contextmesh.app/api/mcp",
+      "apiKey": "sk_tenant_xxx"
+    }
+  }
+}
+```
+
+Agent auto-discovers tools → calls `get_context` before a conversation → calls `track_event` after → calls `analyze` when user asks "why?"
+
+#### Interface 2: REST API
+**Direct HTTP calls for bots, backend services, and custom integrations.**
+
+```
+GET  /api/agent/context?phone=9876543210   → pre-conversation brief
+POST /api/search          { query: "..." } → graph search
+POST /api/insights        { context: ... } → reasoning chain
+POST /api/search/similar  { node_id: ... } → vector similarity
+POST /api/events          { event: ... }   → ingest event
+POST /api/events/transcript { transcript } → STT ingestion
+GET  /api/alerts                           → active alerts
+GET  /api/profiles/[id]                    → full profile
+```
+
+#### Interface 3: SDK (Python + JavaScript)
+**Thin wrappers over REST API for the simplest possible integration.**
+
+```python
+# Python — 3 lines to full context
+from contextmesh import ContextMesh
+
+cm = ContextMesh(api_key="sk_xxx", tenant="city_hospital")
+context = cm.get_context(phone="9876543210")
+# → profile, events, commitments, risk signals, suggested actions
+
+# Search the graph
+results = cm.search("readmissions within 30 days")
+
+# Ingest an event
+cm.track("visit", patient_id="amit_001", diagnosis="STEMI", severity="Critical")
+
+# Get AI analysis
+insight = cm.analyze(results)  # → context, reasoning chain, result
+```
+
+```javascript
+// JavaScript — same API
+import { ContextMesh } from '@contextmesh/sdk';
+
+const cm = new ContextMesh({ apiKey: 'sk_xxx', tenant: 'myntra_demo' });
+const context = await cm.getContext({ phone: '9876543210' });
+const results = await cm.search('Gold tier returns in Bangalore');
+await cm.track('return_initiated', { product: 'Nike Air Max', reason: 'size' });
+```
+
+#### Pre-Conversation Brief (all interfaces return this)
+```json
 {
   "profile": { "name": "Priya M.", "tier": "Gold", "city": "Bangalore", "ltv": 120000, "risk_score": 0.72 },
   "recent_events": [
@@ -531,19 +623,16 @@ GET /api/agent/context?phone=9876543210
 
 **How suggested_actions works:** Groq LLM receives the assembled context and generates 2-3 specific, actionable suggestions. Not generic — tailored to THIS customer's history.
 
-**MCP Server:**
-```
-/api/mcp — Model Context Protocol endpoint
-```
-Exposes the same context graph as an MCP server so any AI agent framework (LangChain, CrewAI, custom) can query it natively. Thin wrapper over the Agent Context API.
-
 **Post-Conversation Trace Commit:**
-Already handled by `/api/events/transcript` — after a call ends, STT output hits the transcript endpoint, LLM extracts everything, Kafka pipeline processes it into the graph.
+Already handled by `/api/events/transcript` — after a call ends, STT output hits any of the 3 interfaces, Kafka pipeline processes it into the graph.
 
 **Acceptance criteria:**
-- Single API call returns full agent brief in <100ms (cache hit) / <300ms (cache miss)
+- MCP server exposes 7 tools, auto-discoverable by any MCP-compatible agent
+- REST API returns full agent brief in <100ms (cache hit) / <300ms (cache miss)
+- Python SDK and JS SDK published as packages (~50 lines each, wrapping REST)
 - Suggested actions are specific to the customer, not generic
-- MCP server passes standard MCP protocol compliance
+- All three interfaces return identical data
+- Auth: API key scoped to tenant (same key works across all 3 interfaces)
 - Works for both retail (customer context) and healthcare (patient context)
 
 ### F9a: Client Intelligence Dashboard (Side B)

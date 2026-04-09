@@ -242,9 +242,18 @@ context-graph/
 ├── prisma/
 │   └── schema.prisma                   # Org, User, Plan tables (SQLite for hackathon)
 │
+├── sdk/
+│   ├── python/
+│   │   └── contextmesh/
+│   │       └── __init__.py             # Python SDK (~50 lines, wraps REST)
+│   └── js/
+│       └── src/
+│           └── index.ts                # JS SDK (~50 lines, wraps REST)
+│
 ├── docs/
 │   ├── PRD.md
-│   └── LLD.md
+│   ├── LLD.md
+│   └── architecture-cloud-agnostic.md
 │
 ├── .env.local
 ├── .env.example
@@ -1877,45 +1886,290 @@ LIMIT $limit
 
 **Performance:** <100ms with Redis cache, <300ms without. Cache key = `agent-context:{profileId}`, TTL = 15 min, invalidated on new event for this profile.
 
-### 12.2 POST /api/mcp — MCP Server
+### 12.2 Agent Integration Layer — 3 Interfaces
 
-Exposes the context graph via Model Context Protocol so any AI agent framework can query it.
+All three interfaces share the same auth (API key per tenant), same underlying service layer, and return identical data.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                  AGENT INTEGRATION LAYER                     │
+│                                                              │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  │
+│  │  MCP Server  │  │  REST API    │  │  SDK             │  │
+│  │  /api/mcp    │  │  /api/agent/ │  │  Python + JS     │  │
+│  │              │  │  /api/search │  │  wraps REST      │  │
+│  │  7 tools     │  │  /api/events │  │                  │  │
+│  │  auto-       │  │  etc.        │  │  contextmesh-sdk │  │
+│  │  discover    │  │              │  │  @contextmesh/sdk│  │
+│  └──────┬───────┘  └──────┬───────┘  └────────┬─────────┘  │
+│         └─────────────────┼────────────────────┘            │
+│                           ▼                                  │
+│              ┌──────────────────────┐                        │
+│              │  API Key Auth        │                        │
+│              │  Tenant Scoping      │                        │
+│              │  Plan Gating         │                        │
+│              └──────────┬───────────┘                        │
+│                         ▼                                    │
+│              ┌──────────────────────┐                        │
+│              │  Shared Service Layer │                        │
+│              │  (Neo4j, Groq, Kafka) │                        │
+│              └──────────────────────┘                        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### Interface 1: MCP Server (POST /api/mcp)
 
 ```typescript
 // app/api/mcp/route.ts
+// Implements Model Context Protocol — any MCP-compatible agent connects here
 
 export async function POST(req: NextRequest) {
   const { method, params } = await req.json();
-  const tenantId = await getTenantFromApiKey(req); // API key auth for MCP
+  const tenantId = await getTenantFromApiKey(req);
+  const vertical = await getVerticalForTenant(tenantId);
 
   switch (method) {
+    // ── Resource Discovery ──
     case 'resources/list':
       return NextResponse.json({
         resources: [
-          { uri: 'contextmesh://profiles', name: 'Customer/Patient Profiles' },
-          { uri: 'contextmesh://events', name: 'Events & Visits' },
-          { uri: 'contextmesh://commitments', name: 'Open Commitments' },
-          { uri: 'contextmesh://alerts', name: 'Active Alerts' },
+          { uri: 'contextmesh://profiles', name: 'Customer/Patient Profiles', description: 'Unified profiles with identity resolution' },
+          { uri: 'contextmesh://events', name: 'Events & Visits', description: 'All tracked events and visits' },
+          { uri: 'contextmesh://commitments', name: 'Commitments', description: 'Open, fulfilled, and breached commitments' },
+          { uri: 'contextmesh://alerts', name: 'Alerts', description: 'Active proactive alerts' },
         ]
       });
 
     case 'resources/read':
-      // Route to existing APIs based on URI
       if (params.uri.startsWith('contextmesh://profiles/'))
         return getProfile(params.uri.split('/').pop(), tenantId);
+      if (params.uri === 'contextmesh://alerts')
+        return getAlerts(tenantId);
       // ...
 
+    // ── Tool Discovery ──
+    case 'tools/list':
+      return NextResponse.json({
+        tools: [
+          {
+            name: 'get_context',
+            description: 'Get full pre-conversation brief for a person. Returns profile, recent events, commitments, risk signals, and AI-suggested actions.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                phone: { type: 'string', description: 'Phone number' },
+                email: { type: 'string', description: 'Email address' },
+                mrn: { type: 'string', description: 'Medical Record Number (healthcare)' },
+                profile_id: { type: 'string', description: 'Direct profile ID' },
+              },
+            },
+          },
+          {
+            name: 'search',
+            description: 'Search the context graph using natural language. Returns graph nodes, edges, and timeline.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                query: { type: 'string', description: 'Natural language query, e.g. "Gold tier returns in Bangalore"' },
+                limit: { type: 'number', description: 'Max results (default 50)' },
+              },
+              required: ['query'],
+            },
+          },
+          {
+            name: 'analyze',
+            description: 'Get AI insight with full reasoning chain (context → reasoning → result) for current graph context.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                query: { type: 'string', description: 'What to analyze' },
+                node_ids: { type: 'array', items: { type: 'string' }, description: 'Specific nodes to analyze' },
+              },
+            },
+          },
+          {
+            name: 'find_similar',
+            description: 'Find profiles/events with similar patterns using vector similarity.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                node_id: { type: 'string' },
+                node_label: { type: 'string', enum: ['Profile', 'Event', 'Visit'] },
+                limit: { type: 'number', description: 'Max results (default 5)' },
+              },
+              required: ['node_id', 'node_label'],
+            },
+          },
+          {
+            name: 'track_event',
+            description: 'Ingest a new event into the context graph.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                event_type: { type: 'string' },
+                identifiers: { type: 'object', description: '{ email, phone, device_id, mrn... }' },
+                properties: { type: 'object', description: 'Event-specific properties' },
+              },
+              required: ['event_type', 'identifiers'],
+            },
+          },
+          {
+            name: 'get_alerts',
+            description: 'Get active proactive alerts (policy drift, risk signals, anomaly spikes).',
+            inputSchema: { type: 'object', properties: {} },
+          },
+          {
+            name: 'get_commitments',
+            description: 'Get open and breached commitments for a person.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                profile_id: { type: 'string' },
+                status: { type: 'string', enum: ['open', 'breached', 'all'] },
+              },
+            },
+          },
+        ],
+      });
+
+    // ── Tool Execution ──
     case 'tools/call':
-      // Expose search, insights, patterns as MCP tools
-      if (params.name === 'search')
-        return handleSearch(params.arguments.query, tenantId);
-      if (params.name === 'get_context')
-        return handleAgentContext(params.arguments.identifier, tenantId);
-      if (params.name === 'analyze')
-        return handleInsight(params.arguments, tenantId);
+      switch (params.name) {
+        case 'get_context':
+          return handleAgentContext(params.arguments, tenantId, vertical);
+        case 'search':
+          return handleSearch(params.arguments.query, tenantId, vertical, params.arguments.limit);
+        case 'analyze':
+          return handleInsight(params.arguments, tenantId, vertical);
+        case 'find_similar':
+          return handleSimilarSearch(params.arguments, tenantId);
+        case 'track_event':
+          return handleTrackEvent(params.arguments, tenantId);
+        case 'get_alerts':
+          return handleAlerts(tenantId);
+        case 'get_commitments':
+          return handleCommitments(params.arguments, tenantId);
+      }
   }
 }
 ```
+
+**How an external Claude agent connects:**
+```json
+// claude_desktop_config.json or agent config
+{
+  "mcpServers": {
+    "contextmesh": {
+      "url": "https://contextmesh.app/api/mcp",
+      "headers": { "Authorization": "Bearer sk_tenant_xxx" }
+    }
+  }
+}
+```
+Agent auto-discovers 7 tools → uses them in conversations without any custom code.
+
+#### Interface 2: REST API
+
+Same endpoints as documented in Section 6 (API Design). Auth via `Authorization: Bearer sk_tenant_xxx` header.
+
+#### Interface 3: SDK (lib/sdk/)
+
+**Python SDK (published as `contextmesh` on PyPI):**
+
+```python
+# sdk/python/contextmesh/__init__.py
+
+import requests
+
+class ContextMesh:
+    def __init__(self, api_key: str, base_url: str = "https://contextmesh.app"):
+        self.api_key = api_key
+        self.base_url = base_url
+        self.headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    def get_context(self, **identifiers) -> dict:
+        """Get full pre-conversation brief."""
+        params = "&".join(f"{k}={v}" for k, v in identifiers.items())
+        res = requests.get(f"{self.base_url}/api/agent/context?{params}", headers=self.headers)
+        return res.json()
+
+    def search(self, query: str, limit: int = 50) -> dict:
+        """Natural language search across the graph."""
+        res = requests.post(f"{self.base_url}/api/search", json={"query": query, "limit": limit}, headers=self.headers)
+        return res.json()
+
+    def analyze(self, query: str = None, node_ids: list = None) -> dict:
+        """Get AI insight with reasoning chain."""
+        res = requests.post(f"{self.base_url}/api/insights", json={"question": query, "node_ids": node_ids}, headers=self.headers)
+        return res.json()
+
+    def find_similar(self, node_id: str, node_label: str, limit: int = 5) -> dict:
+        """Find similar profiles/events via vector search."""
+        res = requests.post(f"{self.base_url}/api/search/similar", json={"node_id": node_id, "node_label": node_label, "limit": limit}, headers=self.headers)
+        return res.json()
+
+    def track(self, event_type: str, identifiers: dict = None, **properties) -> dict:
+        """Ingest a new event."""
+        res = requests.post(f"{self.base_url}/api/events", json={"event_type": event_type, "identifiers": identifiers or {}, "properties": properties}, headers=self.headers)
+        return res.json()
+```
+
+**JavaScript SDK (published as `@contextmesh/sdk` on npm):**
+
+```typescript
+// sdk/js/src/index.ts
+
+export class ContextMesh {
+  private apiKey: string;
+  private baseUrl: string;
+
+  constructor({ apiKey, baseUrl = 'https://contextmesh.app' }: { apiKey: string; baseUrl?: string }) {
+    this.apiKey = apiKey;
+    this.baseUrl = baseUrl;
+  }
+
+  private async request(method: string, path: string, body?: unknown) {
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method,
+      headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    return res.json();
+  }
+
+  getContext(identifiers: Record<string, string>) {
+    const params = new URLSearchParams(identifiers).toString();
+    return this.request('GET', `/api/agent/context?${params}`);
+  }
+  search(query: string, limit = 50) { return this.request('POST', '/api/search', { query, limit }); }
+  analyze(query?: string, nodeIds?: string[]) { return this.request('POST', '/api/insights', { question: query, node_ids: nodeIds }); }
+  findSimilar(nodeId: string, nodeLabel: string, limit = 5) { return this.request('POST', '/api/search/similar', { node_id: nodeId, node_label: nodeLabel, limit }); }
+  track(eventType: string, identifiers: Record<string, string>, properties?: Record<string, unknown>) { return this.request('POST', '/api/events', { event_type: eventType, identifiers, properties }); }
+}
+```
+
+#### API Key Auth (shared across all 3 interfaces)
+
+```typescript
+// lib/api-auth.ts
+// Used by MCP, REST, and SDK requests
+
+export async function getTenantFromApiKey(req: NextRequest): Promise<string> {
+  const authHeader = req.headers.get('Authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
+    throw new AuthError('Missing API key');
+  }
+  const apiKey = authHeader.slice(7);
+
+  // Lookup org by API key
+  const org = await prisma.org.findFirst({ where: { apiKey } });
+  if (!org) throw new AuthError('Invalid API key');
+
+  return org.tenantId;
+}
+```
+
+API keys are generated per org on the settings page. Same key works for MCP, REST, and SDK.
 
 ---
 
