@@ -7,7 +7,6 @@ export function getDriver(): Driver {
     const uri = process.env.NEO4J_URI!;
     const user = process.env.NEO4J_USER || "neo4j";
     const password = process.env.NEO4J_PASSWORD!;
-
     driver = neo4j.driver(uri, neo4j.auth.basic(user, password));
   }
   return driver;
@@ -26,17 +25,34 @@ export async function runQuery<T = Record<string, unknown>>(
   }
 }
 
-export async function initSchema(): Promise<void> {
-  await runQuery(
-    "CREATE CONSTRAINT user_id IF NOT EXISTS FOR (u:User) REQUIRE u.user_id IS UNIQUE"
-  );
-  await runQuery(
-    "CREATE INDEX event_timestamp IF NOT EXISTS FOR (e:Event) ON (e.timestamp)"
-  );
-  await runQuery(
-    "CREATE INDEX event_type IF NOT EXISTS FOR (e:Event) ON (e.event_type)"
-  );
-  await runQuery(
-    "CREATE INDEX session_id IF NOT EXISTS FOR (s:Session) ON (s.session_id)"
-  );
+export async function runWrite(
+  cypher: string,
+  params: Record<string, unknown> = {}
+): Promise<void> {
+  const session = getDriver().session();
+  try {
+    await session.executeWrite((tx) => tx.run(cypher, params));
+  } finally {
+    await session.close();
+  }
+}
+
+export async function initSchema(
+  constraints: string[],
+  indexes: string[]
+): Promise<void> {
+  for (const c of constraints) {
+    try {
+      await runQuery(c);
+    } catch {
+      // Constraint may already exist
+    }
+  }
+  for (const idx of indexes) {
+    try {
+      await runQuery(idx);
+    } catch {
+      // Index may already exist
+    }
+  }
 }

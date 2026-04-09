@@ -1,15 +1,15 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { getOrgFromRequest, errorResponse } from "@/lib/api-auth";
 import { initSchema } from "@/lib/neo4j";
+import { getVertical } from "@/verticals/registry";
 
-export async function POST() {
+export async function POST(req: NextRequest) {
   try {
-    await initSchema();
+    const session = await getOrgFromRequest(req);
+    const config = getVertical(session.vertical);
+    await initSchema(config.constraints, config.indexes);
     return NextResponse.json({ success: true, message: "Schema initialized" });
   } catch (error) {
-    console.error("Schema init error:", error);
-    return NextResponse.json(
-      { error: "Failed to initialize schema" },
-      { status: 500 }
-    );
+    return errorResponse(error);
   }
 }
