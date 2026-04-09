@@ -3,38 +3,67 @@ import { getOrgFromRequest, errorResponse } from "@/lib/api-auth";
 import { runQuery } from "@/lib/neo4j";
 import { chatCompletion } from "@/lib/groq";
 import { getCommitments } from "@/lib/commitment-tracker";
+import { TraceCollector } from "@/lib/trace";
 
 // POST instead of GET — PII (phone, email, mrn) should not be in URL params
 export async function POST(req: NextRequest) {
   try {
-    const session = await getOrgFromRequest(req);
+    const traceEnabled = req.nextUrl.searchParams.get("trace") === "true";
+    const trace = traceEnabled ? new TraceCollector() : null;
+
+    const session = await (trace
+      ? trace.run("Auth & Tenant Resolution", "getOrgFromRequest()", "auth",
+          "API key / session", () => getOrgFromRequest(req))
+      : getOrgFromRequest(req));
+
     const body = await req.json();
 
     // Resolve profile from any identifier in the body
-    const profileId = await resolveFromBody(body, session.tenantId);
+    const profileId = await (trace
+      ? trace.run("Profile Identity Lookup", "resolveFromBody()", "neo4j",
+          `identifiers: ${Object.keys(body).filter(k => !k.startsWith("_")).join(", ")}`,
+          () => resolveFromBody(body, session.tenantId))
+      : resolveFromBody(body, session.tenantId));
+
     if (!profileId) {
       return NextResponse.json({ error: "Profile not found" }, { status: 404 });
     }
 
     // Run all queries in parallel
-    const [profile, recentEvents, commitments, exceptions, similarCases] = await Promise.all([
-      getProfile(profileId, session.tenantId),
-      getRecentEvents(profileId, session.tenantId, session.vertical),
-      getCommitments(session.tenantId, profileId),
-      getExceptions(profileId, session.tenantId, session.vertical),
-      findSimilarProfiles(profileId, session.tenantId, session.vertical),
-    ]);
+    const [profile, recentEvents, commitments, exceptions, similarCases] = await (trace
+      ? trace.run("Parallel Context Assembly", "Promise.all()", "neo4j",
+          `profile: ${profileId}`,
+          () => Promise.all([
+            getProfile(profileId, session.tenantId),
+            getRecentEvents(profileId, session.tenantId, session.vertical),
+            getCommitments(session.tenantId, profileId),
+            getExceptions(profileId, session.tenantId, session.vertical),
+            findSimilarProfiles(profileId, session.tenantId, session.vertical),
+          ]))
+      : Promise.all([
+          getProfile(profileId, session.tenantId),
+          getRecentEvents(profileId, session.tenantId, session.vertical),
+          getCommitments(session.tenantId, profileId),
+          getExceptions(profileId, session.tenantId, session.vertical),
+          findSimilarProfiles(profileId, session.tenantId, session.vertical),
+        ]));
 
     // Compute risk score
-    const riskScore = computeRiskScore(recentEvents, commitments, session.vertical);
+    const riskScore = await (trace
+      ? trace.run("Risk Scoring", "computeRiskScore()", "scoring",
+          `events: ${recentEvents.length}, commitments: ${commitments.length}`,
+          async () => computeRiskScore(recentEvents, commitments, session.vertical))
+      : Promise.resolve(computeRiskScore(recentEvents, commitments, session.vertical)));
 
     // Build risk signals
     const riskSignals = buildRiskSignals(recentEvents, commitments);
 
     // LLM generates suggested actions
-    const suggestedActions = await generateActions(
-      profile, recentEvents, commitments, riskSignals, session.vertical
-    );
+    const suggestedActions = await (trace
+      ? trace.run("LLM Suggested Actions", "generateActions()", "llm",
+          `risk_score: ${riskScore}, signals: ${riskSignals.length}`,
+          () => generateActions(profile, recentEvents, commitments, riskSignals, session.vertical))
+      : generateActions(profile, recentEvents, commitments, riskSignals, session.vertical));
 
     return NextResponse.json({
       profile,
@@ -47,6 +76,7 @@ export async function POST(req: NextRequest) {
       risk_score: riskScore,
       risk_signals: riskSignals,
       suggested_actions: suggestedActions,
+      ...(trace ? { _trace: trace.finalize("agent_context", profileId) } : {}),
     });
   } catch (error) {
     return errorResponse(error);

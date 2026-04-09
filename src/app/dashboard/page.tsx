@@ -1,13 +1,17 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
+import { useSession } from "next-auth/react";
 import SearchBar from "@/components/SearchBar";
 import ContextGraph from "@/components/ContextGraph";
 import EventTimeline from "@/components/EventTimeline";
 import NodeDetail from "@/components/NodeDetail";
 import InsightPanel from "@/components/InsightPanel";
 import ValueBar from "@/components/ValueBar";
+import TracePanel from "@/components/TracePanel";
 import { GraphNode, GraphResult, InsightResponse } from "@/types/graph";
+import { PipelineTrace } from "@/lib/trace";
 
 export default function DashboardPage() {
   const [graph, setGraph] = useState<GraphResult | null>(null);
@@ -18,17 +22,20 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(false);
   const [insightLoading, setInsightLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [debugMode, setDebugMode] = useState(false);
+  const [trace, setTrace] = useState<PipelineTrace | null>(null);
 
-  // TODO: Replace with actual org context from auth
-  const orgId = typeof window !== "undefined" ? localStorage.getItem("orgId") || "" : "";
-  const vertical = typeof window !== "undefined" ? localStorage.getItem("vertical") || "retail" : "retail";
-  const plan = typeof window !== "undefined" ? localStorage.getItem("plan") || "enterprise" : "enterprise";
+  const { data: session } = useSession();
+
+  // Prefer session data, fall back to localStorage (for demo without auth)
+  const orgId = session?.orgId || (typeof window !== "undefined" ? localStorage.getItem("orgId") || "" : "");
+  const vertical = session?.vertical || (typeof window !== "undefined" ? localStorage.getItem("vertical") || "retail" : "retail");
+  const plan = session?.plan || (typeof window !== "undefined" ? localStorage.getItem("plan") || "enterprise" : "enterprise");
 
   const sampleQueries = vertical === "retail"
     ? ["Gold tier returns in Bangalore", "COD orders above 5000", "Nike return rate"]
     : ["readmissions within 30 days", "Dr. Sharma cardiac patients", "insurance denials"];
 
-  // Load stats on mount
   useEffect(() => {
     if (!orgId) return;
     fetch("/api/stats", { headers: { "x-org-id": orgId } })
@@ -44,37 +51,32 @@ export default function DashboardPage() {
     setSelectedNode(null);
     setInsight(null);
     setCypherInfo(null);
+    setTrace(null);
 
     try {
-      const res = await fetch("/api/search", {
+      const url = `/api/search${debugMode ? "?trace=true" : ""}`;
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-org-id": orgId },
         body: JSON.stringify({ query, limit: 50 }),
       });
       const data = await res.json();
 
-      if (!res.ok) {
-        setError(data.error || "Search failed");
-        return;
-      }
+      if (!res.ok) { setError(data.error || "Search failed"); return; }
 
       setGraph(data.results);
-      setCypherInfo({
-        cypher: data.cypher,
-        confidence: data.cypher_confidence,
-        interpretation: data.interpretation,
-      });
+      setCypherInfo({ cypher: data.cypher, confidence: data.cypher_confidence, interpretation: data.interpretation });
+      if (data._trace) setTrace(data._trace);
     } catch {
       setError("Failed to search");
     } finally {
       setLoading(false);
     }
-  }, [orgId]);
+  }, [orgId, debugMode]);
 
   const handleRecenter = useCallback(async (node: GraphNode) => {
     setLoading(true);
     setSelectedNode(null);
-
     try {
       const res = await fetch("/api/graph/explore", {
         method: "POST",
@@ -93,7 +95,8 @@ export default function DashboardPage() {
   const handleAnalyze = useCallback(async (node?: GraphNode) => {
     setInsightLoading(true);
     try {
-      const res = await fetch("/api/insights", {
+      const url = `/api/insights${debugMode ? "?trace=true" : ""}`;
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-org-id": orgId },
         body: JSON.stringify({
@@ -102,33 +105,37 @@ export default function DashboardPage() {
         }),
       });
       const data = await res.json();
-      setInsight(data.result ? { context: data.context || { summary: "", data_points: [], graph_scope: "" }, reasoning: data.reasoning || [], result: data.result } : data);
+      const insightData = data.result
+        ? { context: data.context || { summary: "", data_points: [], graph_scope: "" }, reasoning: data.reasoning || [], result: data.result }
+        : data;
+      setInsight(insightData);
+      if (data._trace) setTrace(data._trace);
     } catch {
-      // Insight generation failed silently
+      // silent
     } finally {
       setInsightLoading(false);
     }
-  }, [orgId, graph]);
+  }, [orgId, graph, debugMode]);
 
   const handleFindSimilar = useCallback(async (node: GraphNode) => {
     setLoading(true);
     try {
-      const res = await fetch("/api/search/similar", {
+      await fetch("/api/search/similar", {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-org-id": orgId },
         body: JSON.stringify({ node_id: node.id, node_label: node.label, limit: 5 }),
       });
-      await res.json();
-      // TODO: render similar results in a comparison view
     } catch {
-      // Similar search failed silently
+      // silent
     } finally {
       setLoading(false);
     }
   }, [orgId]);
 
+  const isRetail = vertical === "retail";
+
   return (
-    <div className="min-h-screen bg-gray-950 text-white">
+    <div className={`min-h-screen bg-gray-950 text-white ${debugMode ? "pr-[420px]" : ""}`}>
       {/* Header */}
       <header className="border-b border-gray-800 px-6 py-3">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
@@ -137,23 +144,38 @@ export default function DashboardPage() {
               <span className="text-emerald-400">Context</span>Mesh
             </h1>
             <span className="text-xs bg-gray-800 text-gray-400 px-2 py-0.5 rounded">
-              {vertical === "retail" ? "🏪 Retail" : "🏥 Healthcare"}
+              {isRetail ? "🏪 Retail" : "🏥 Healthcare"}
             </span>
-            <span className="text-xs bg-emerald-900/30 text-emerald-400 px-2 py-0.5 rounded">
+            <span className="text-xs bg-emerald-900/30 text-emerald-400 px-2 py-0.5 rounded capitalize">
               {plan}
             </span>
           </div>
           <div className="flex items-center gap-3">
-            <button className="text-gray-400 hover:text-white text-sm">Settings</button>
+            {/* Side B nav */}
+            <nav className="flex gap-1 text-xs">
+              <Link href="/dashboard/analytics" className="px-2 py-1 text-gray-500 hover:text-white transition-colors">Analytics</Link>
+              <Link href="/dashboard/policies" className="px-2 py-1 text-gray-500 hover:text-white transition-colors">Policies</Link>
+              <Link href="/dashboard/agents" className="px-2 py-1 text-gray-500 hover:text-white transition-colors">Agents</Link>
+              <Link href="/dashboard/commitments" className="px-2 py-1 text-gray-500 hover:text-white transition-colors">Commitments</Link>
+            </nav>
+            {/* Debug toggle */}
+            <button
+              onClick={() => { setDebugMode(!debugMode); if (!debugMode) setTrace(null); }}
+              className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-colors ${
+                debugMode
+                  ? "bg-purple-900/30 border-purple-700 text-purple-300"
+                  : "border-gray-700 text-gray-500 hover:text-white hover:border-gray-600"
+              }`}
+            >
+              🔬 Debug
+            </button>
           </div>
         </div>
       </header>
 
       <main className="max-w-7xl mx-auto px-6 py-4 space-y-4">
-        {/* Value Bar */}
         <ValueBar stats={stats} />
 
-        {/* Search */}
         <SearchBar
           onSearch={handleSearch}
           loading={loading}
@@ -161,14 +183,12 @@ export default function DashboardPage() {
           cypherInfo={cypherInfo}
         />
 
-        {/* Error */}
         {error && (
           <div className="bg-red-950/50 border border-red-800 rounded-lg px-4 py-3 text-red-400 text-sm">
             {error}
           </div>
         )}
 
-        {/* Graph + Timeline */}
         {graph && graph.nodes.length > 0 && (
           <>
             <div className="flex items-center justify-between">
@@ -203,7 +223,6 @@ export default function DashboardPage() {
           </>
         )}
 
-        {/* Empty state */}
         {!graph && !loading && !error && (
           <div className="text-center py-24">
             <div className="text-4xl mb-4">🔍</div>
@@ -214,7 +233,6 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* Insight Panel */}
         <InsightPanel
           insight={insight}
           loading={insightLoading}
@@ -223,7 +241,6 @@ export default function DashboardPage() {
         />
       </main>
 
-      {/* Node Detail Panel */}
       <NodeDetail
         node={selectedNode}
         onClose={() => setSelectedNode(null)}
@@ -231,6 +248,14 @@ export default function DashboardPage() {
         onAnalyze={handleAnalyze}
         onFindSimilar={handleFindSimilar}
       />
+
+      {/* Trace panel — slides in from right when debug mode on */}
+      {debugMode && (
+        <TracePanel
+          trace={trace}
+          onClose={() => { setDebugMode(false); setTrace(null); }}
+        />
+      )}
     </div>
   );
 }

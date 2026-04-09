@@ -3,10 +3,19 @@ import { getOrgFromRequest, errorResponse, ApiError } from "@/lib/api-auth";
 import { generateJSON } from "@/lib/groq";
 import { PLANS } from "@/lib/plans";
 import { InsightResponse } from "@/types/graph";
+import { TraceCollector } from "@/lib/trace";
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await getOrgFromRequest(req);
+    const traceEnabled = req.nextUrl.searchParams.get("trace") === "true";
+    const trace = traceEnabled ? new TraceCollector() : null;
+
+    const session = await (trace
+      ? trace.run("Auth & Tenant Resolution", "getOrgFromRequest()", "auth",
+          "session cookie / API key",
+          () => getOrgFromRequest(req))
+      : getOrgFromRequest(req));
+
     const plan = PLANS[session.plan];
 
     if (plan.insightLevel === "none") {
@@ -17,7 +26,7 @@ export async function POST(req: NextRequest) {
 
     const graphContext = nodes
       ?.map((n: Record<string, unknown>) =>
-        `${n.label}: ${n.displayName} (${JSON.stringify(n.properties)})`
+        `${n.label}: ${n.displayName} (${JSON.stringify(n.properties).slice(0, 100)})`
       )
       .join("\n") || query || "No context provided";
 
@@ -45,17 +54,36 @@ Return a JSON object with exactly this structure:
 Rules:
 - Be specific with numbers, not vague
 - Each reasoning step must reference actual data
-- Confidence per step: 0.9+ if data clearly supports it, 0.7-0.9 if strongly implied, <0.7 if inferred
-- Overall confidence = weighted average of reasoning steps`;
+- Confidence per step: 0.9+ if data clearly supports, 0.7-0.9 if strongly implied, <0.7 if inferred`;
 
-    const insight = await generateJSON<InsightResponse>(prompt, graphContext);
+    // Trace the context assembly step
+    await (trace
+      ? trace.run("Context Assembly", "assembleContext()", "mapping",
+          `${nodes?.length || 0} nodes, vertical: ${session.vertical}`,
+          async () => ({ context: graphContext }))
+      : Promise.resolve());
 
-    // Plan gating: Pro gets result only, Enterprise gets full chain
-    if (plan.insightLevel === "summary") {
-      return NextResponse.json({ result: insight.result });
+    const result = await (trace
+      ? trace.run("LLM Reasoning Chain", "generateJSON()", "llm",
+          `model: llama-3.3-70b, plan: ${session.plan}`,
+          () => generateJSON<InsightResponse>(prompt, graphContext))
+      : generateJSON<InsightResponse>(prompt, graphContext));
+
+    // Confidence scoring step
+    if (trace) {
+      trace.skip("Confidence Aggregation", "aggregateConfidence()", "scoring",
+        `overall: ${result.result?.confidence ?? 0}`);
     }
 
-    return NextResponse.json(insight);
+    // Plan gating: Pro gets result only, Enterprise gets full chain
+    const response = plan.insightLevel === "summary"
+      ? { result: result.result }
+      : result;
+
+    return NextResponse.json({
+      ...response,
+      ...(trace ? { _trace: trace.finalize("insight", query || "analyze") } : {}),
+    });
   } catch (error) {
     return errorResponse(error);
   }
