@@ -26,18 +26,25 @@ export async function GET(req: NextRequest) {
       ),
     ]);
 
+    // Neo4j returns integers as { low: n, high: 0 } — convert to plain numbers
+    const toNum = (v: unknown): number => {
+      if (typeof v === "number") return v;
+      if (v && typeof v === "object" && "low" in v) return (v as { low: number }).low;
+      return 0;
+    };
+
     const commitmentStats: Record<string, number> = {};
     for (const c of commitments) {
-      commitmentStats[c.status] = c.count;
+      commitmentStats[c.status] = toNum(c.count);
     }
 
     return NextResponse.json({
-      events_tracked: events[0]?.count || 0,
-      profiles_resolved: profiles[0]?.count || 0,
-      identity_fragments: identities[0]?.count || 0,
+      events_tracked: toNum(events[0]?.count),
+      profiles_resolved: toNum(profiles[0]?.count),
+      identity_fragments: toNum(identities[0]?.count),
       commitments: commitmentStats,
-      avg_extraction_confidence: confidence[0]?.avg_confidence || 0,
-      total_scored_events: confidence[0]?.total || 0,
+      avg_extraction_confidence: toNum(confidence[0]?.avg_confidence),
+      total_scored_events: toNum(confidence[0]?.total),
     });
   } catch (error) {
     return errorResponse(error);

@@ -37,37 +37,33 @@ async function handleToolCall(
   req: NextRequest
 ) {
   const baseUrl = `${req.nextUrl.protocol}//${req.nextUrl.host}`;
-  const headers = { Authorization: req.headers.get("Authorization")!, "Content-Type": "application/json", "x-org-id": session.orgId };
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader) return NextResponse.json({ error: "Missing Authorization header" }, { status: 401 });
+  const headers = { Authorization: authHeader, "Content-Type": "application/json", "x-org-id": session.orgId };
+
+  async function callApi(url: string, method = "GET", body?: unknown) {
+    const res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined });
+    const data = await res.json().catch(() => ({ error: `Upstream returned non-JSON (status ${res.status})` }));
+    if (!res.ok) return NextResponse.json({ error: data.error || "Upstream error", status: res.status }, { status: res.status });
+    return NextResponse.json(data);
+  }
 
   switch (params.name) {
-    case "get_context": {
-      const res = await fetch(`${baseUrl}/api/agent/context`, { method: "POST", headers, body: JSON.stringify(params.arguments) });
-      return NextResponse.json(await res.json());
-    }
-    case "search": {
-      const res = await fetch(`${baseUrl}/api/search`, { method: "POST", headers, body: JSON.stringify(params.arguments) });
-      return NextResponse.json(await res.json());
-    }
-    case "analyze": {
-      const res = await fetch(`${baseUrl}/api/insights`, { method: "POST", headers, body: JSON.stringify(params.arguments) });
-      return NextResponse.json(await res.json());
-    }
-    case "find_similar": {
-      const res = await fetch(`${baseUrl}/api/search/similar`, { method: "POST", headers, body: JSON.stringify(params.arguments) });
-      return NextResponse.json(await res.json());
-    }
-    case "track_event": {
-      const res = await fetch(`${baseUrl}/api/events`, { method: "POST", headers, body: JSON.stringify(params.arguments) });
-      return NextResponse.json(await res.json());
-    }
-    case "get_alerts": {
-      const res = await fetch(`${baseUrl}/api/alerts`, { headers });
-      return NextResponse.json(await res.json());
-    }
+    case "get_context":
+      return callApi(`${baseUrl}/api/agent/context`, "POST", params.arguments);
+    case "search":
+      return callApi(`${baseUrl}/api/search`, "POST", params.arguments);
+    case "analyze":
+      return callApi(`${baseUrl}/api/insights`, "POST", params.arguments);
+    case "find_similar":
+      return callApi(`${baseUrl}/api/search/similar`, "POST", params.arguments);
+    case "track_event":
+      return callApi(`${baseUrl}/api/events`, "POST", params.arguments);
+    case "get_alerts":
+      return callApi(`${baseUrl}/api/alerts`);
     case "get_commitments": {
       const qs = new URLSearchParams(params.arguments as Record<string, string>).toString();
-      const res = await fetch(`${baseUrl}/api/profiles/${params.arguments.profile_id || ""}?commitments=true&${qs}`, { headers });
-      return NextResponse.json(await res.json());
+      return callApi(`${baseUrl}/api/profiles/${(params.arguments as Record<string, string>).profile_id || ""}?commitments=true&${qs}`);
     }
     default:
       return NextResponse.json({ error: `Unknown tool: ${params.name}` }, { status: 400 });

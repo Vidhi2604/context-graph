@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getOrgFromRequest, errorResponse, ApiError } from "@/lib/api-auth";
-import { generateJSON } from "@/lib/groq";
+import { claudeExtract } from "@/lib/llm";
 import { PLANS } from "@/lib/plans";
-import { InsightResponse } from "@/types/graph";
+import type { InsightResponse } from "@/types/graph";
 import { TraceCollector } from "@/lib/trace";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export async function POST(req: NextRequest) {
   try {
@@ -15,6 +16,9 @@ export async function POST(req: NextRequest) {
           "session cookie / API key",
           () => getOrgFromRequest(req))
       : getOrgFromRequest(req));
+
+    const { success: rlOk } = await checkRateLimit(`insights:${session.tenantId}`, 10, 60);
+    if (!rlOk) return NextResponse.json({ error: "Rate limit exceeded" }, { status: 429 });
 
     const plan = PLANS[session.plan];
 
@@ -63,11 +67,21 @@ Rules:
           async () => ({ context: graphContext }))
       : Promise.resolve());
 
-    const result = await (trace
-      ? trace.run("LLM Reasoning Chain", "generateJSON()", "llm",
+    const raw = await (trace
+      ? trace.run("LLM Reasoning Chain", "claudeExtract()", "llm",
           `model: llama-3.3-70b, plan: ${session.plan}`,
-          () => generateJSON<InsightResponse>(prompt, graphContext))
-      : generateJSON<InsightResponse>(prompt, graphContext));
+          () => claudeExtract(prompt, graphContext))
+      : claudeExtract(prompt, graphContext)) as Record<string, unknown>;
+
+    // Validate shape — LLM must return an object with a `result` field
+    if (!raw || typeof raw !== "object" || !raw.result) {
+      return NextResponse.json(
+        { error: "Failed to generate insight — LLM returned unexpected format" },
+        { status: 502 }
+      );
+    }
+
+    const result = raw as unknown as InsightResponse;
 
     // Confidence scoring step
     if (trace) {

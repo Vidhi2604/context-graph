@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
       `
       MATCH (center:${node_label} {${idField}: $nodeId, _tenant: $tenantId})
       OPTIONAL MATCH path = (center)-[*1..${Math.min(depth, 3)}]-(connected)
-      WHERE ALL(n IN nodes(path) WHERE n._tenant = $tenantId OR n._tenant IS NULL)
+      WHERE ALL(n IN nodes(path) WHERE n._tenant = $tenantId)
       RETURN path
       LIMIT $limit
       `,

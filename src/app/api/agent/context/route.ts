@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getOrgFromRequest, errorResponse } from "@/lib/api-auth";
 import { runQuery } from "@/lib/neo4j";
-import { chatCompletion } from "@/lib/groq";
+import { claudeExtract } from "@/lib/llm";
 import { getCommitments } from "@/lib/commitment-tracker";
 import { TraceCollector } from "@/lib/trace";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 // POST instead of GET — PII (phone, email, mrn) should not be in URL params
 export async function POST(req: NextRequest) {
@@ -15,6 +16,9 @@ export async function POST(req: NextRequest) {
       ? trace.run("Auth & Tenant Resolution", "getOrgFromRequest()", "auth",
           "API key / session", () => getOrgFromRequest(req))
       : getOrgFromRequest(req));
+
+    const { success: rlOk } = await checkRateLimit(`agent:${session.tenantId}`, 60, 60);
+    if (!rlOk) return NextResponse.json({ error: "Rate limit exceeded" }, { status: 429 });
 
     const body = await req.json();
 
@@ -282,18 +286,23 @@ async function generateActions(
 ): Promise<{ action: string; confidence: number }[]> {
   const context = JSON.stringify({ profile, recent_events: events.slice(0, 5), commitments: commitments.slice(0, 3), riskSignals });
 
-  const raw = await chatCompletion(
+  const parsed = await claudeExtract(
+    context,
     `You are an agent copilot for a ${vertical} organization. Given customer context, suggest 2-3 specific actions.
 Rules: Be specific to THIS customer. Reference actual data. If breached commitment, address it first. Keep each action to 1 sentence.
-Return JSON: { "actions": [{ "action": "...", "confidence": 0.0-1.0 }] }`,
-    context,
-    { jsonMode: true, temperature: 0.2 }
-  );
+Return JSON: { "actions": [{ "action": "...", "confidence": 0.0-1.0 }] }`
+  ) as { actions?: { action: string; confidence: number }[] };
 
-  try {
-    const parsed = JSON.parse(raw);
-    return (parsed.actions || []).filter((a: { confidence: number }) => a.confidence >= 0.5);
-  } catch {
+  // Guard: ensure parsed.actions exists, is an array, and has valid shape
+  const actions = parsed?.actions;
+  if (!Array.isArray(actions) || actions.length === 0) {
     return [{ action: "Review customer history before proceeding", confidence: 0.6 }];
   }
+
+  const valid = actions.filter(
+    (a) => a && typeof a.action === "string" && typeof a.confidence === "number" && a.confidence >= 0.5
+  );
+  return valid.length > 0
+    ? valid
+    : [{ action: "Review customer history before proceeding", confidence: 0.6 }];
 }

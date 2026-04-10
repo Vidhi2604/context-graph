@@ -1,4 +1,4 @@
-import { chatCompletion } from "./groq";
+import { claudeExtract } from "./llm";
 import { getVertical } from "@/verticals/registry";
 
 const BLOCKED_KEYWORDS = [
@@ -23,47 +23,38 @@ export async function generateCypher(
   const config = getVertical(vertical);
   const prompt = buildPrompt(config);
 
-  const raw = await chatCompletion(
-    prompt,
+  // claudeExtract returns parsed JSON directly
+  const raw = await claudeExtract(
     `Translate this search to a Cypher query (limit ${limit}): "${query}"\n\nReturn ONLY valid JSON: {"cypher": "...", "interpretation": "...", "cypher_confidence": 0.0-1.0}`,
-    { temperature: 0.1, maxTokens: 1024 }
-  );
+    prompt
+  ) as { cypher?: string; interpretation?: string; cypher_confidence?: number };
+
+  const cypher = raw.cypher ?? "";
+  const interpretation = raw.interpretation ?? query;
+  const confidence = raw.cypher_confidence ?? 0;
+
+  if (!cypher) {
+    return { cypher: "", interpretation, cypher_confidence: 0, isValid: false, error: "No Cypher returned" };
+  }
 
   try {
-    // Try to parse as JSON first
-    const cleaned = raw.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
-    const parsed = JSON.parse(cleaned);
-    const validation = validateCypher(parsed.cypher);
+    const validation = validateCypher(cypher);
 
     if (!validation.valid) {
-      return { ...parsed, isValid: false, error: validation.error };
+      return { cypher, interpretation, cypher_confidence: confidence, isValid: false, error: validation.error };
     }
 
-    // Ensure tenant filter is present — check for _tenant property, not literal value
-    if (!parsed.cypher.includes("_tenant")) {
-      return { ...parsed, isValid: false, error: "Missing _tenant filter" };
+    if (!cypher.includes("_tenant")) {
+      return { cypher, interpretation, cypher_confidence: confidence, isValid: false, error: "Missing _tenant filter" };
     }
 
-    // Replace any placeholder with actual tenantId for execution
-    parsed.cypher = parsed.cypher
+    // Replace placeholders with actual tenantId
+    const finalCypher = cypher
       .replace(/\{tenantId\}/g, tenantId)
       .replace(/\$tenantId/g, `"${tenantId}"`);
 
-    return { ...parsed, isValid: true };
+    return { cypher: finalCypher, interpretation, cypher_confidence: confidence, isValid: true };
   } catch {
-    // If JSON parse fails, try to extract Cypher directly
-    const cypherMatch = raw.match(/MATCH[\s\S]+LIMIT\s+\d+/i);
-    if (cypherMatch) {
-      const cypher = cypherMatch[0];
-      const validation = validateCypher(cypher);
-      return {
-        cypher,
-        interpretation: query,
-        cypher_confidence: 0.5,
-        isValid: validation.valid,
-        error: validation.error,
-      };
-    }
     return {
       cypher: "",
       interpretation: query,
@@ -123,11 +114,30 @@ IDENTITY RESOLUTION:
 - When searching by name/tier/city, match on Profile:
   MATCH (p:Profile {_tenant: "{tenantId}"}) WHERE p.name CONTAINS $searchValue
 
-IMPORTANT:
-- Every query MUST filter by _tenant = "{tenantId}" (use this exact placeholder, it will be replaced)
-- Only use READ operations (MATCH, RETURN, WHERE, ORDER, LIMIT, OPTIONAL MATCH, WITH, UNWIND)
+CRITICAL RULES:
+- Every query MUST filter by _tenant = "{tenantId}"
+- Only READ operations (MATCH, RETURN, WHERE, ORDER, LIMIT, OPTIONAL MATCH, WITH, UNWIND)
 - Always include LIMIT
-- Return full nodes for graph rendering
+- ALWAYS return connected context — not just top-level nodes. Use OPTIONAL MATCH to fetch:
+  * For retail: Profile → Events → Products, Payments, Policies, Agents
+  * For healthcare: Profile → Visits → Diagnoses, Treatments, Providers, Protocols
+
+GRAPH CONTEXT RULE (very important):
+Every query must return the full subgraph so the frontend can render a connected graph.
+Bad example (DO NOT DO):  RETURN p LIMIT 50
+Good example (DO THIS):
+  MATCH (p:Profile {tier:"Gold", city:"Bangalore", _tenant:"{tenantId}"})
+  OPTIONAL MATCH (p)-[:PERFORMED]->(e:Event)
+  OPTIONAL MATCH (e)-[:INVOLVES]->(prod:Product)
+  OPTIONAL MATCH (e)-[:PAID_VIA]->(pay:Payment)
+  OPTIONAL MATCH (e)-[:GOVERNED_BY|OVERRODE]->(pol:Policy)
+  OPTIONAL MATCH (e)-[:HANDLED_BY]->(a:Agent)
+  RETURN p, e, prod, pay, pol, a
+  ORDER BY e.timestamp DESC LIMIT 50
+
+TIMELINE RULE:
+If query is aggregate (category/product/event type search), also return counts grouped by date:
+  WITH e, count(e) as daily_count, date(e.timestamp) as day RETURN day, daily_count ORDER BY day
 
 Return ONLY valid JSON: {"cypher": "MATCH ...", "interpretation": "what this query does", "cypher_confidence": 0.0-1.0}`;
 }

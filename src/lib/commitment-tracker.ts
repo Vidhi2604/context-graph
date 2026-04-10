@@ -85,7 +85,7 @@ export async function getCommitments(
 
   if (profileId) {
     cypher = `
-      MATCH (p:Profile {profile_id: $profileId, _tenant: $tenantId})-[:HAS_COMMITMENT]->(c:Commitment)
+      MATCH (p:Profile {profile_id: $profileId, _tenant: $tenantId})-[:HAS_COMMITMENT]->(c:Commitment {_tenant: $tenantId})
       OPTIONAL MATCH (c)<-[:CREATED_COMMITMENT]-(e)
     `;
     params.profileId = profileId;

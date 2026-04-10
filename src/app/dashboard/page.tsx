@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { useSession } from "next-auth/react";
+import { useSession, signOut } from "next-auth/react";
 import SearchBar from "@/components/SearchBar";
 import ContextGraph from "@/components/ContextGraph";
 import EventTimeline from "@/components/EventTimeline";
@@ -10,8 +10,11 @@ import NodeDetail from "@/components/NodeDetail";
 import InsightPanel from "@/components/InsightPanel";
 import ValueBar from "@/components/ValueBar";
 import TracePanel from "@/components/TracePanel";
+import FilterBar from "@/components/FilterBar";
+import OrgSwitcher from "@/components/OrgSwitcher";
 import { GraphNode, GraphResult, InsightResponse } from "@/types/graph";
 import { PipelineTrace } from "@/lib/trace";
+import { getVertical } from "@/verticals/registry";
 
 export default function DashboardPage() {
   const [graph, setGraph] = useState<GraphResult | null>(null);
@@ -24,6 +27,8 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [debugMode, setDebugMode] = useState(false);
   const [trace, setTrace] = useState<PipelineTrace | null>(null);
+  const [lastQuery, setLastQuery] = useState("");
+  const [activeFilters, setActiveFilters] = useState<Record<string, string[]>>({});
 
   const { data: session } = useSession();
 
@@ -32,9 +37,17 @@ export default function DashboardPage() {
   const vertical = session?.vertical || (typeof window !== "undefined" ? localStorage.getItem("vertical") || "retail" : "retail");
   const plan = session?.plan || (typeof window !== "undefined" ? localStorage.getItem("plan") || "enterprise" : "enterprise");
 
-  const sampleQueries = vertical === "retail"
-    ? ["Gold tier returns in Bangalore", "COD orders above 5000", "Nike return rate"]
-    : ["readmissions within 30 days", "Dr. Sharma cardiac patients", "insurance denials"];
+  // Safe vertical config — fallback to retail if unknown vertical value
+  const verticalConfig = (() => {
+    try { return getVertical(vertical); } catch { return getVertical("retail"); }
+  })();
+  const sampleQueries = verticalConfig.sampleQueries.slice(0, 3);
+
+  const handleFilterChange = useCallback((filterId: string, values: string[]) => {
+    setActiveFilters((prev) => ({ ...prev, [filterId]: values }));
+  }, []);
+
+  const handleFilterClear = useCallback(() => setActiveFilters({}), []);
 
   useEffect(() => {
     if (!orgId) return;
@@ -53,18 +66,30 @@ export default function DashboardPage() {
     setCypherInfo(null);
     setTrace(null);
 
+    // Append active filters to query as natural language context
+    const filterParts = Object.entries(activeFilters)
+      .filter(([, v]) => v.length > 0)
+      .map(([k, v]) => {
+        if (k === "dateRange") return `last ${v[0]}`;
+        return `${k.replace(/([A-Z])/g, " $1").toLowerCase()}: ${v.join(" or ")}`;
+      });
+    const enrichedQuery = filterParts.length > 0
+      ? `${query} (${filterParts.join(", ")})`
+      : query;
+
     try {
       const url = `/api/search${debugMode ? "?trace=true" : ""}`;
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-org-id": orgId },
-        body: JSON.stringify({ query, limit: 50 }),
+        body: JSON.stringify({ query: enrichedQuery, limit: 50, filters: activeFilters }),
       });
       const data = await res.json();
 
       if (!res.ok) { setError(data.error || "Search failed"); return; }
 
       setGraph(data.results);
+      setLastQuery(enrichedQuery);
       setCypherInfo({ cypher: data.cypher, confidence: data.cypher_confidence, interpretation: data.interpretation });
       if (data._trace) setTrace(data._trace);
     } catch {
@@ -132,7 +157,6 @@ export default function DashboardPage() {
     }
   }, [orgId]);
 
-  const isRetail = vertical === "retail";
 
   return (
     <div className={`min-h-screen bg-gray-950 text-white ${debugMode ? "pr-[420px]" : ""}`}>
@@ -143,9 +167,7 @@ export default function DashboardPage() {
             <h1 className="text-xl font-bold">
               <span className="text-emerald-400">Context</span>Mesh
             </h1>
-            <span className="text-xs bg-gray-800 text-gray-400 px-2 py-0.5 rounded">
-              {isRetail ? "🏪 Retail" : "🏥 Healthcare"}
-            </span>
+            <OrgSwitcher currentOrgId={orgId} currentVertical={vertical} />
             <span className="text-xs bg-emerald-900/30 text-emerald-400 px-2 py-0.5 rounded capitalize">
               {plan}
             </span>
@@ -157,6 +179,7 @@ export default function DashboardPage() {
               <Link href="/dashboard/policies" className="px-2 py-1 text-gray-500 hover:text-white transition-colors">Policies</Link>
               <Link href="/dashboard/agents" className="px-2 py-1 text-gray-500 hover:text-white transition-colors">Agents</Link>
               <Link href="/dashboard/commitments" className="px-2 py-1 text-gray-500 hover:text-white transition-colors">Commitments</Link>
+              <Link href="/settings" className="px-2 py-1 text-gray-500 hover:text-white transition-colors">Settings</Link>
             </nav>
             {/* Debug toggle */}
             <button
@@ -169,6 +192,25 @@ export default function DashboardPage() {
             >
               🔬 Debug
             </button>
+
+            {/* User indicator */}
+            <div className="flex items-center gap-2 border-l border-gray-800 pl-3">
+              <div className="w-7 h-7 rounded-full bg-emerald-700 flex items-center justify-center text-xs font-bold text-white">
+                {session?.user?.name?.[0]?.toUpperCase() || session?.user?.email?.[0]?.toUpperCase() || "U"}
+              </div>
+              <div className="text-xs">
+                <div className="text-gray-300 max-w-[100px] truncate">
+                  {session?.user?.name || session?.user?.email?.split("@")[0] || "Demo User"}
+                </div>
+              </div>
+              <button
+                onClick={() => signOut({ callbackUrl: "/auth/signin" })}
+                className="text-xs text-gray-600 hover:text-red-400 transition-colors ml-1"
+                title="Sign out"
+              >
+                ↪
+              </button>
+            </div>
           </div>
         </div>
       </header>
@@ -181,6 +223,13 @@ export default function DashboardPage() {
           loading={loading}
           sampleQueries={sampleQueries}
           cypherInfo={cypherInfo}
+        />
+
+        <FilterBar
+          filters={verticalConfig.filters}
+          activeFilters={activeFilters}
+          onFilterChange={handleFilterChange}
+          onClear={handleFilterClear}
         />
 
         {error && (
@@ -208,6 +257,7 @@ export default function DashboardPage() {
                 <ContextGraph
                   nodes={graph.nodes}
                   edges={graph.edges}
+                  query={lastQuery}
                   centerNodeId={graph.centerNodeId}
                   onNodeClick={setSelectedNode}
                   onNodeDoubleClick={handleRecenter}

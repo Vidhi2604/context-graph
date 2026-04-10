@@ -1,6 +1,8 @@
 import { GraphNode, GraphEdge, TimelineEntry, GraphResult } from "@/types/graph";
 import { VerticalConfig } from "@/types/vertical";
 
+const MAX_EDGES = 300;
+
 export function mapNeo4jToGraph(
   records: Record<string, unknown>[],
   vertical: VerticalConfig,
@@ -38,7 +40,13 @@ export function mapNeo4jToGraph(
   }
 
   const nodes = Array.from(nodesMap.values());
-  const edges = Array.from(edgesMap.values());
+  // Sort by source node relevance descending, cap at MAX_EDGES
+  const allEdges = Array.from(edgesMap.values()).sort((a, b) => {
+    const relA = nodesMap.get(a.source)?.relevance ?? 0;
+    const relB = nodesMap.get(b.source)?.relevance ?? 0;
+    return relB - relA;
+  });
+  const edges = allEdges.length > MAX_EDGES ? allEdges.slice(0, MAX_EDGES) : allEdges;
   const timeline = buildTimeline(nodes);
 
   // Determine center node
@@ -67,6 +75,45 @@ export function mapNeo4jToGraph(
   };
 }
 
+// Convert Neo4j native types (DateTime, Integer) to plain JS values
+function sanitizeValue(v: unknown): unknown {
+  if (v === null || v === undefined) return v;
+  if (typeof v === "string" || typeof v === "boolean") return v;
+  if (typeof v === "number") return v;
+
+  // Neo4j Integer: { low, high }
+  if (typeof v === "object" && "low" in (v as object) && "high" in (v as object)) {
+    const obj = v as { low: number; high: number };
+    return obj.high === 0 ? obj.low : obj.high * 4294967296 + obj.low;
+  }
+
+  // Neo4j DateTime: has year, month, day fields
+  if (typeof v === "object" && "year" in (v as object) && "month" in (v as object) && "day" in (v as object)) {
+    const dt = v as Record<string, unknown>;
+    const y = sanitizeValue(dt.year);
+    const mo = sanitizeValue(dt.month);
+    const d = sanitizeValue(dt.day);
+    const h = sanitizeValue(dt.hour) || 0;
+    const mi = sanitizeValue(dt.minute) || 0;
+    const s = sanitizeValue(dt.second) || 0;
+    return `${y}-${String(mo).padStart(2,"0")}-${String(d).padStart(2,"0")}T${String(h).padStart(2,"0")}:${String(mi).padStart(2,"0")}:${String(s).padStart(2,"0")}Z`;
+  }
+
+  if (Array.isArray(v)) return v.map(sanitizeValue);
+  if (typeof v === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as object)) out[k] = sanitizeValue(val);
+    return out;
+  }
+  return String(v);
+}
+
+function sanitizeProps(props: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(props)) out[k] = sanitizeValue(v);
+  return out;
+}
+
 function mapNode(value: unknown, vertical: VerticalConfig): GraphNode | null {
   const node = value as Neo4jNode;
   if (!node.labels || node.labels.length === 0) return null;
@@ -85,7 +132,7 @@ function mapNode(value: unknown, vertical: VerticalConfig): GraphNode | null {
   return {
     id,
     label,
-    properties: props,
+    properties: sanitizeProps(props),
     displayName,
     color,
     relevance: typeof props.relevance === "number" ? props.relevance : undefined,

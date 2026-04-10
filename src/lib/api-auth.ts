@@ -14,6 +14,12 @@ export async function getOrgFromApiKey(req: NextRequest): Promise<OrgSession> {
   });
   if (!org) throw new ApiError(401, "Invalid API key");
 
+  // API key auth doesn't require a userId (used by bots/agents)
+  // Log a warning if the org has no human members — unusual but not fatal
+  if (org.members.length === 0) {
+    console.warn(`[api-auth] Org ${org.id} has no members — API key auth without owner`);
+  }
+
   return {
     userId: org.members[0]?.userId || "",
     orgId: org.id,
@@ -54,10 +60,13 @@ export class ApiError extends Error {
   }
 }
 
+// Standard error shape: { error: string, code?: string }
+// Use this everywhere to keep API responses consistent for SDK consumers.
 export function errorResponse(error: unknown) {
   if (error instanceof ApiError) {
     return Response.json({ error: error.message }, { status: error.status });
   }
-  console.error(error);
+  console.error("[api] Internal error:", error);
   return Response.json({ error: "Internal server error" }, { status: 500 });
 }
+

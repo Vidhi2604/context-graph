@@ -4,7 +4,7 @@ generator client {
 
 datasource db {
   provider = "sqlite"
-  url      = "file:./dev.db"
+  url      = env("DATABASE_URL")
 }
 
 model User {
@@ -12,11 +12,20 @@ model User {
   email     String      @unique
   name      String?
   password  String?
-  image     String?
-  orgs      OrgMember[]
-  accounts  Account[]
-  sessions  Session[]
-  createdAt DateTime    @default(now())
+  image         String?
+  emailVerified DateTime?
+  orgs          OrgMember[]
+  accounts      Account[]
+  sessions      Session[]
+  createdAt     DateTime    @default(now())
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
 }
 
 model Account {
@@ -62,8 +71,22 @@ model OrgMember {
   userId String
   orgId  String
   role   String @default("member")
-  user   User   @relation(fields: [userId], references: [id])
-  org    Org    @relation(fields: [orgId], references: [id])
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  org    Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
 
   @@unique([userId, orgId])
+}
+
+// IdempotencyKey — prevents duplicate event processing from Kafka at-least-once delivery.
+// Key format: "{tenantId}:{eventType}:{sourceId}"
+// Cleaned by daily cron: DELETE WHERE expiresAt < now()
+model IdempotencyKey {
+  id          String   @id @default(cuid())
+  key         String
+  tenantId    String
+  processedAt DateTime @default(now())
+  expiresAt   DateTime
+
+  @@unique([key, tenantId])
+  @@index([tenantId, expiresAt])
 }

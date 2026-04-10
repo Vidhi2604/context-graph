@@ -4,7 +4,6 @@ import { useState } from "react";
 import { signIn } from "next-auth/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { createHash } from "crypto";
 
 export default function SignUpPage() {
   const [name, setName] = useState("");
@@ -21,11 +20,10 @@ export default function SignUpPage() {
 
     try {
       // Create user
-      const hash = createHash("sha256").update(password).digest("hex");
       const res = await fetch("/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email, password: hash }),
+        body: JSON.stringify({ name, email, password }),
       });
 
       if (!res.ok) {

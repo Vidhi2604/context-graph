@@ -4,10 +4,20 @@ let driver: Driver | null = null;
 
 export function getDriver(): Driver {
   if (!driver) {
-    const uri = process.env.NEO4J_URI!;
+    const uri = process.env.NEO4J_URI;
+    const password = process.env.NEO4J_PASSWORD;
+    if (!uri || !password) {
+      throw new Error(
+        "Missing Neo4j credentials. Set NEO4J_URI and NEO4J_PASSWORD in .env.local"
+      );
+    }
     const user = process.env.NEO4J_USER || "neo4j";
-    const password = process.env.NEO4J_PASSWORD!;
-    driver = neo4j.driver(uri, neo4j.auth.basic(user, password));
+    driver = neo4j.driver(uri!, neo4j.auth.basic(user, password!), {
+      // NEO4J_POOL_SIZE default = 5 (Aura Free caps ~25 total connections)
+      maxConnectionPoolSize: parseInt(process.env.NEO4J_POOL_SIZE ?? "5"),
+      connectionAcquisitionTimeout: 5000,
+      connectionTimeout: 10000,
+    });
   }
   return driver;
 }

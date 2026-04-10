@@ -191,8 +191,9 @@ async function mergeProfiles(
   const params = { winnerId, loserId, tenantId };
 
   // Reparent each known relationship type explicitly (no APOC needed)
-  // Retail relationships
-  for (const relType of ["PERFORMED", "HAD_VISIT", "HAS_SESSION", "HAS_COMMITMENT", "READMITTED"]) {
+  // Whitelist prevents Cypher injection via interpolated relType
+  const ALLOWED_REL_TYPES = ["PERFORMED", "HAD_VISIT", "HAS_SESSION", "HAS_COMMITMENT", "READMITTED"];
+  for (const relType of ALLOWED_REL_TYPES) {
     await runQuery(
       `
       MATCH (loser:Profile {profile_id: $loserId, _tenant: $tenantId})-[r:${relType}]->(n)

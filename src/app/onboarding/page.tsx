@@ -100,7 +100,8 @@ export default function OnboardingPage() {
       localStorage.setItem("orgId", org.id);
       localStorage.setItem("vertical", vertical);
       localStorage.setItem("plan", plan);
-      localStorage.setItem("apiKey", org.apiKey || "");
+      // Note: apiKey NOT stored client-side — use server session or settings page to retrieve it
+      if (userId) localStorage.setItem("userId", userId);
 
       router.push("/dashboard");
     } catch {
