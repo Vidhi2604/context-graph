@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { getOrgFromRequest, errorResponse } from "@/lib/api-auth";
 import { getAdapter, getConnectors, saveConnector, deleteConnector, maskConfig } from "@/lib/connectors/registry";
