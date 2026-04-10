@@ -14,9 +14,9 @@ export default function ValueBar({ stats }: ValueBarProps) {
   if (!stats) return null;
 
   const cards = [
-    { label: "Events Tracked", value: stats.events_tracked.toLocaleString() },
-    { label: "Profiles Resolved", value: stats.profiles_resolved.toString() },
-    { label: "Identities Merged", value: stats.identity_fragments.toString() },
+    { label: "Events Tracked", value: (stats.events_tracked ?? 0).toLocaleString() },
+    { label: "Profiles Resolved", value: (stats.profiles_resolved ?? 0).toString() },
+    { label: "Identities Merged", value: (stats.identity_fragments ?? 0).toString() },
     {
       label: "Commitments",
       value: `${stats.commitments?.open || 0}/${stats.commitments?.fulfilled || 0}/${stats.commitments?.breached || 0}`,

@@ -116,7 +116,8 @@ function summarize(value: unknown): string {
   if (typeof value === "number" || typeof value === "boolean") return String(value);
 
   if (Array.isArray(value)) {
-    return `[${value.length} items] ${JSON.stringify(value[0]).slice(0, 80)}...`;
+    const first = JSON.stringify(value[0]) ?? "";
+    return `[${value.length} items] ${first.slice(0, 80)}...`;
   }
 
   if (typeof value === "object") {

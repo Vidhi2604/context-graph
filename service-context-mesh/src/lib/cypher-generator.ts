@@ -123,17 +123,21 @@ CRITICAL RULES:
   * For healthcare: Profile → Visits → Diagnoses, Treatments, Providers, Protocols
 
 GRAPH CONTEXT RULE (very important):
-Every query must return the full subgraph so the frontend can render a connected graph.
-Bad example (DO NOT DO):  RETURN p LIMIT 50
+Every query MUST return PATH objects so edges are included in the graph. Never return just nodes.
+Bad example (DO NOT DO):  RETURN p, v, d LIMIT 50
 Good example (DO THIS):
-  MATCH (p:Profile {tier:"Gold", city:"Bangalore", _tenant:"{tenantId}"})
-  OPTIONAL MATCH (p)-[:PERFORMED]->(e:Event)
-  OPTIONAL MATCH (e)-[:INVOLVES]->(prod:Product)
-  OPTIONAL MATCH (e)-[:PAID_VIA]->(pay:Payment)
-  OPTIONAL MATCH (e)-[:GOVERNED_BY|OVERRODE]->(pol:Policy)
-  OPTIONAL MATCH (e)-[:HANDLED_BY]->(a:Agent)
-  RETURN p, e, prod, pay, pol, a
-  ORDER BY e.timestamp DESC LIMIT 50
+  MATCH (p:Profile {_tenant:"{tenantId}"})-[:HAD_VISIT]->(v:Visit)-[:ATTENDED_BY]->(pr:Provider)
+  WHERE toLower(pr.name) CONTAINS 'sharma'
+  OPTIONAL MATCH path1 = (p)-[:HAD_VISIT]->(v)
+  OPTIONAL MATCH path2 = (v)-[:DIAGNOSED_WITH]->(d:Diagnosis)
+  OPTIONAL MATCH path3 = (v)-[:TREATED_WITH]->(tr:Treatment)
+  OPTIONAL MATCH path4 = (v)-[:ATTENDED_BY]->(prov:Provider)
+  OPTIONAL MATCH path5 = (v)-[:IN_DEPARTMENT]->(dept:Department)
+  RETURN p, path1, path2, path3, path4, path5
+  LIMIT 50
+
+ALWAYS use "OPTIONAL MATCH path = (...)" and include path variables in RETURN.
+ALWAYS include the Profile node (p) directly in RETURN so graph expansion works.
 
 TIMELINE RULE:
 If query is aggregate (category/product/event type search), also return counts grouped by date:

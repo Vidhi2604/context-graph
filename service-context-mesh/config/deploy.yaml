@@ -1,0 +1,24 @@
+helmReleaseName: context-mesh
+namespace: team-Latency-Labs
+helmChart: ./helm/nurix-service
+dockerfilePath: ./service-context-mesh/Dockerfile
+
+docker:
+  buildArgs:
+    PORT: "3000"
+
+service:
+  port: 3000
+  targetPort: 3000
+
+resources:
+  requests:
+    cpu: "250m"
+    memory: "512Mi"
+  limits:
+    cpu: "1000m"
+    memory: "1Gi"
+
+env:
+  NODE_ENV: "production"
+  NEXT_TELEMETRY_DISABLED: "1"

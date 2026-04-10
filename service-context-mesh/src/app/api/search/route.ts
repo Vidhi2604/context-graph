@@ -84,7 +84,7 @@ export async function POST(req: NextRequest) {
       : Promise.resolve());
 
     // Execute primary query
-    const neo4jActId = logActivity(session.tenantId, { layer: "neo4j", label: "Neo4j Query", detail: `cypher: ${cypherResult.cypher.slice(0, 80)}…`, status: "running", started_at: Date.now() });
+    const neo4jActId = logActivity(session.tenantId, { layer: "neo4j", label: "Neo4j Query", detail: `cypher: ${(cypherResult.cypher || "").slice(0, 80)}…`, status: "running", started_at: Date.now() });
     const primaryRecords = await (trace
       ? trace.run("Neo4j Execution", "runQuery()", "neo4j",
           `cypher length: ${cypherResult.cypher.length} chars`,
