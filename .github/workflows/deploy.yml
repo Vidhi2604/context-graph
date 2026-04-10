@@ -1,17 +1,26 @@
 name: Deploy
 on:
   push:
-    branches:
-      - stage
-    paths:
-      - 'service-*/**'
+    branches: [stage]
+    paths: [service-*/**]
   workflow_dispatch:
-    inputs:
-      service_path:
-        description: "Service folder to deploy (e.g. service-one)."
-        required: false
-        type: string
 jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.detect.outputs.services }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: detect
+        run: |
+          SERVICES=$(git diff --name-only HEAD~1 | grep -o '^service-[^/]*' | sort -u || echo "")
+          echo "services=$SERVICES" >> $GITHUB_OUTPUT
   deploy:
+    needs: detect
+    if: needs.detect.outputs.services != ''
     uses: nurixlabs/hack-central-apr-26/.github/workflows/deploy.yml@main
+    with:
+      services: ${{ needs.detect.outputs.services }}
     secrets: inherit
