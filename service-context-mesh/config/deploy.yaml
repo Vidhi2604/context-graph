@@ -1,24 +1,24 @@
 helmReleaseName: context-mesh
-namespace: team-Latency-Labs
+namespace: team-latency-labs
 helmChart: ./helm/nurix-service
-dockerfilePath: ./service-context-mesh/Dockerfile
 
+dockerfilePath: ./helm/nextjs-service.Dockerfile
 docker:
   buildArgs:
     PORT: "3000"
 
-service:
-  port: 3000
-  targetPort: 3000
+ingress:
+  enabled: true
+  host: context-mesh.hack-apr-26.nurixlabs.com
+  path: /
+  pathType: Prefix
 
 resources:
   requests:
-    cpu: "250m"
     memory: "512Mi"
+    cpu: "250m"
   limits:
-    cpu: "1000m"
     memory: "1Gi"
+    cpu: "500m"
 
-env:
-  NODE_ENV: "production"
-  NEXT_TELEMETRY_DISABLED: "1"
+replicaCount: 1
