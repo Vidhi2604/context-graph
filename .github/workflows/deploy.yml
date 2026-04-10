@@ -1,1 +1,19 @@
-404: Not Found
+name: Deploy
+# ──────────────────────────────────────────────────────────────────────────────
+# Trigger stub — this is the ONLY workflow file teams need in their repo.
+#
+# All detection and deploy logic lives in the central repo:
+#   nurixlabs/hack-central-apr-26/.github/workflows/deploy.yml
+#
+# Push events must fire from within the team repo (GitHub limitation), so this
+# stub captures the trigger and immediately hands off to the central workflow.
+# Teams should not need to edit anything below.
+# ──────────────────────────────────────────────────────────────────────────────
+on:
+  push:
+    branches:
+      - stage
+    paths:
+      - 'service-*/**'
+  w service_path: ${{ github.event.inputs.service_path || '' }}
+    secrets: inherit
