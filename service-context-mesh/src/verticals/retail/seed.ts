@@ -164,8 +164,8 @@ export async function seedRetail(tenantId: string): Promise<{profiles:number;eve
     for (const e of evts) {
       const eid = `evt_${uuidv4().slice(0,8)}`;
       await runQuery(
-        `MATCH (p:Profile {profile_id:$pid,_tenant:$t}) CREATE (ev:Event {id:$eid,event_type:$type,timestamp:datetime($ts),status:$status,amount:$amount,channel:$ch,exception:$exc,confidence_score:$conf,properties:$props,_tenant:$t,created_at:datetime()}) CREATE (p)-[:PERFORMED]->(ev)`,
-        {pid,t:T,eid,type:e.type,ts:da(e.ago),status:e.status,amount:e.amount||null,ch:pick(CHANNELS),exc:e.exc||false,conf:e.conf,props:JSON.stringify(e.props||{})}
+        `MATCH (p:Profile {profile_id:$pid,_tenant:$t}) CREATE (ev:Event {id:$eid,event_type:$type,timestamp:datetime($ts),status:$status,amount:$amount,method:$method,channel:$ch,exception:$exc,confidence_score:$conf,properties:$props,_tenant:$t,created_at:datetime()}) CREATE (p)-[:PERFORMED]->(ev)`,
+        {pid,t:T,eid,type:e.type,ts:da(e.ago),status:e.status,amount:e.amount||null,method:e.props?.payment_method||pick(PAYMENTS),ch:pick(CHANNELS),exc:e.exc||false,conf:e.conf,props:JSON.stringify(e.props||{})}
       );
       if (prevId) await runQuery(`MATCH (a:Event {id:$a,_tenant:$t}) MATCH (b:Event {id:$b,_tenant:$t}) CREATE (a)-[:NEXT]->(b)`,{a:prevId,b:eid,t:T});
       prevId = eid;

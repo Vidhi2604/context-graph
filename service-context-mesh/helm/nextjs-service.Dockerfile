@@ -16,7 +16,6 @@ RUN npm ci
 RUN npx prisma generate
 RUN npm run build
 
-USER nextjs
 EXPOSE 3000
 ENV PORT=3000 HOSTNAME="0.0.0.0"
-CMD ["node", ".next/standalone/server.js"]
+CMD ["sh", "-c", "node_modules/.bin/prisma db push --skip-generate && node .next/standalone/server.js"]

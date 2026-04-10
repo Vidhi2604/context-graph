@@ -124,20 +124,23 @@ CRITICAL RULES:
 
 GRAPH CONTEXT RULE (very important):
 Every query MUST return PATH objects so edges are included in the graph. Never return just nodes.
-Bad example (DO NOT DO):  RETURN p, v, d LIMIT 50
+CRITICAL: Only use path variables for patterns you have already matched. Never reference a path variable unless the node it contains was matched in the same or prior MATCH/OPTIONAL MATCH clause.
+
+Bad example (DO NOT DO):
+  MATCH (p:Profile {_tenant:"{tenantId}"}) WHERE p.tier = 'Gold'
+  OPTIONAL MATCH path4 = (v)-[:ATTENDED_BY]->(prov:Provider)  ← ERROR: v not defined here
+  RETURN p, path4
+
 Good example (DO THIS):
-  MATCH (p:Profile {_tenant:"{tenantId}"})-[:HAD_VISIT]->(v:Visit)-[:ATTENDED_BY]->(pr:Provider)
-  WHERE toLower(pr.name) CONTAINS 'sharma'
-  OPTIONAL MATCH path1 = (p)-[:HAD_VISIT]->(v)
-  OPTIONAL MATCH path2 = (v)-[:DIAGNOSED_WITH]->(d:Diagnosis)
-  OPTIONAL MATCH path3 = (v)-[:TREATED_WITH]->(tr:Treatment)
-  OPTIONAL MATCH path4 = (v)-[:ATTENDED_BY]->(prov:Provider)
-  OPTIONAL MATCH path5 = (v)-[:IN_DEPARTMENT]->(dept:Department)
-  RETURN p, path1, path2, path3, path4, path5
-  LIMIT 50
+  MATCH (p:Profile {_tenant:"{tenantId}"}) WHERE p.tier = 'Gold' AND p.city = 'Bangalore'
+  WITH p LIMIT 50
+  OPTIONAL MATCH path1 = (p)-[:PERFORMED]->(e:Event)
+  OPTIONAL MATCH path2 = (e)-[:INVOLVES]->(prod:Product)
+  RETURN p, path1, path2
 
 ALWAYS use "OPTIONAL MATCH path = (...)" and include path variables in RETURN.
 ALWAYS include the Profile node (p) directly in RETURN so graph expansion works.
+NEVER use a variable in an OPTIONAL MATCH that was not defined in a previous MATCH or WITH clause.
 
 TIMELINE RULE:
 If query is aggregate (category/product/event type search), also return counts grouped by date:

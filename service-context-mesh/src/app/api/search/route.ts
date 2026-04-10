@@ -85,12 +85,18 @@ export async function POST(req: NextRequest) {
 
     // Execute primary query
     const neo4jActId = logActivity(session.tenantId, { layer: "neo4j", label: "Neo4j Query", detail: `cypher: ${(cypherResult.cypher || "").slice(0, 80)}…`, status: "running", started_at: Date.now() });
-    const primaryRecords = await (trace
-      ? trace.run("Neo4j Execution", "runQuery()", "neo4j",
-          `cypher length: ${cypherResult.cypher.length} chars`,
-          () => runQuery(cypherResult.cypher))
-      : runQuery(cypherResult.cypher));
-    completeActivity(session.tenantId, neo4jActId, "success", `${primaryRecords.length} records`);
+    let primaryRecords;
+    try {
+      primaryRecords = await (trace
+        ? trace.run("Neo4j Execution", "runQuery()", "neo4j",
+            `cypher length: ${cypherResult.cypher.length} chars`,
+            () => runQuery(cypherResult.cypher))
+        : runQuery(cypherResult.cypher));
+      completeActivity(session.tenantId, neo4jActId, "success", `${primaryRecords.length} records`);
+    } catch {
+      completeActivity(session.tenantId, neo4jActId, "error", "Invalid Cypher — falling back to basic search");
+      return handleBasicSearch(parsed.data.query, session.tenantId, vertical, trace, Math.floor(Math.min(parsed.data.limit, plan.maxGraphNodes === Infinity ? 200 : plan.maxGraphNodes)));
+    }
 
     // Extract profile IDs from results, apply filters, expand to full context
     let profileIds = extractProfileIds(primaryRecords);
@@ -320,15 +326,16 @@ async function addRedisTrace(trace: TraceCollector, tenantId: string) {
   });
 }
 
-function runBasicSearch(query: string, tenantId: string, limit = 25) {
-  return runQuery(
+async function runBasicSearch(query: string, tenantId: string, limit = 25) {
+  // Try name match first
+  const nameRecords = await runQuery(
     `
     MATCH (p:Profile {_tenant: $tenantId})
-    WHERE p.name CONTAINS $query
+    WHERE toLower(p.name) CONTAINS toLower($query)
        OR p.profile_id CONTAINS $query
        OR EXISTS {
          MATCH (p)-[:HAS_IDENTITY]->(i:Identity {_tenant: $tenantId})
-         WHERE i.value CONTAINS $query
+         WHERE toLower(i.value) CONTAINS toLower($query)
        }
     WITH DISTINCT p LIMIT $limit
     OPTIONAL MATCH path = (p)-[r]-(connected)
@@ -336,5 +343,19 @@ function runBasicSearch(query: string, tenantId: string, limit = 25) {
     RETURN p, r, connected, path
     `,
     { query, tenantId, limit: Math.floor(limit) }
+  );
+
+  if (nameRecords.length > 0) return nameRecords;
+
+  // Fallback: return a sample of profiles with their context
+  return runQuery(
+    `
+    MATCH (p:Profile {_tenant: $tenantId})
+    WITH p LIMIT $limit
+    OPTIONAL MATCH path = (p)-[r]-(connected)
+    WHERE connected._tenant = $tenantId
+    RETURN p, r, connected, path
+    `,
+    { tenantId, limit: Math.floor(limit) }
   );
 }
