@@ -1,4 +1,4 @@
-FROM node:20-alpine AS runner
+FROM node:20-alpine
 RUN apk add --no-cache libc6-compat openssl
 WORKDIR /app
 
@@ -8,13 +8,15 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
-COPY public ./public 2>/dev/null || true
-COPY .next/standalone ./
-COPY .next/static ./.next/static
-COPY node_modules/.prisma ./node_modules/.prisma 2>/dev/null || true
-COPY node_modules/@prisma ./node_modules/@prisma 2>/dev/null || true
+# Copy everything
+COPY . .
+
+# Install and build
+RUN npm ci
+RUN npx prisma generate
+RUN npm run build
 
 USER nextjs
 EXPOSE 3000
 ENV PORT=3000 HOSTNAME="0.0.0.0"
-CMD ["node", "server.js"]
+CMD ["node", ".next/standalone/server.js"]
