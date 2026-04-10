@@ -11,6 +11,9 @@ export const PLANS: Record<PlanId, PlanConfig> = {
     apiAccess: false,
     mcpAccess: false,
     maxMembers: 1,
+    auditExport: false,
+    phiAccess: false,
+    patternDiscovery: false,
   },
   pro: {
     name: "Pro",
@@ -22,6 +25,9 @@ export const PLANS: Record<PlanId, PlanConfig> = {
     apiAccess: true,
     mcpAccess: false,
     maxMembers: 5,
+    auditExport: false,
+    phiAccess: false,
+    patternDiscovery: false,
   },
   enterprise: {
     name: "Enterprise",
@@ -33,13 +39,13 @@ export const PLANS: Record<PlanId, PlanConfig> = {
     apiAccess: true,
     mcpAccess: true,
     maxMembers: Infinity,
+    auditExport: true,
+    phiAccess: true,
+    patternDiscovery: true,
   },
 };
 
-export function canUseFeature(
-  plan: PlanId,
-  feature: keyof PlanConfig
-): boolean {
+export function canUseFeature(plan: PlanId, feature: keyof PlanConfig): boolean {
   const config = PLANS[plan];
   const value = config[feature];
   if (typeof value === "boolean") return value;
@@ -50,4 +56,9 @@ export function canUseFeature(
 
 export function getPlanLimits(plan: PlanId): PlanConfig {
   return PLANS[plan];
+}
+
+// Alias used by audit export + HIPAA module
+export function getPlanFeatures(plan: string): PlanConfig {
+  return PLANS[(plan as PlanId)] || PLANS.starter;
 }

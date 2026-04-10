@@ -18,4 +18,7 @@ export interface PlanConfig {
   apiAccess: boolean;
   mcpAccess: boolean;
   maxMembers: number;
+  auditExport: boolean;
+  phiAccess: boolean;
+  patternDiscovery: boolean;
 }

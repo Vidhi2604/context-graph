@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getOrgFromRequest, errorResponse } from "@/lib/api-auth";
-import { consumeEvents } from "@/lib/kafka";
+import { consumeFromStream, isStreamsConfigured } from "@/lib/streams";
 import { resolveIdentity } from "@/lib/identity-resolver";
 import { runQuery } from "@/lib/neo4j";
 import { createCommitment } from "@/lib/commitment-tracker";
+import { classifyConfidence, enqueueForReview } from "@/lib/review-queue";
+import { auditLog } from "@/lib/audit-log";
 import { v4 as uuidv4 } from "uuid";
 
 // In-memory idempotency set (hackathon). Production: Redis with TTL.
@@ -12,12 +14,23 @@ const processedKeys = new Set<string>();
 export async function POST(req: NextRequest) {
   try {
     const session = await getOrgFromRequest(req);
-    const messages = await consumeEvents(session.tenantId);
+
+    // Pull from Redis Streams if configured, otherwise read from request body
+    let messages: Record<string, unknown>[];
+    if (isStreamsConfigured()) {
+      messages = await consumeFromStream(session.tenantId);
+    } else {
+      const body = await req.json().catch(() => ({}));
+      messages = Array.isArray(body.events) ? body.events : body.event ? [body.event] : [];
+    }
+
     const isRetail = session.vertical === "retail";
 
     let processed = 0;
     let skipped = 0;
     let failed = 0;
+    let queued = 0;
+    let rejected = 0;
 
     for (const event of messages) {
       try {
@@ -28,10 +41,52 @@ export async function POST(req: NextRequest) {
           continue;
         }
 
+        // ── Confidence gate ──────────────────────────────────────
+        const confidence = (event.confidence_score as number) ?? 1.0;
+        const decision = classifyConfidence(confidence);
+
+        if (decision === "reject") {
+          rejected++;
+          auditLog({
+            tenant_id: session.tenantId,
+            action: "event_ingested",
+            actor: "system",
+            resource_type: "Event",
+            resource_id: String(event._idempotency_key || "unknown"),
+            metadata: { outcome: "rejected", confidence, reason: "confidence below threshold (0.6)" },
+          });
+          continue;
+        }
+
+        if (decision === "review") {
+          enqueueForReview({
+            tenantId: session.tenantId,
+            source: (event._source as "transcript" | "raw" | "connector" | "api") || "api",
+            confidence_score: confidence,
+            event_type: String(event.event_type || "unknown"),
+            identifiers: (event.identifiers as Record<string, string>) || {},
+            profile_data: event.profile_data as Record<string, unknown>,
+            payload: event,
+            reason: `Confidence ${Math.round(confidence * 100)}% is below auto-commit threshold (85%)`,
+          });
+          queued++;
+          continue;
+        }
+        // decision === "auto_commit" → fall through to normal processing
+
         // 1. Identity resolution
         const identifiers = (event.identifiers || {}) as Record<string, string>;
         const profileData = (event.profile_data || {}) as Record<string, unknown>;
         const { profileId } = await resolveIdentity(identifiers, session.tenantId, profileData);
+
+        auditLog({
+          tenant_id: session.tenantId,
+          action: "event_ingested",
+          actor: String(event._source || "api"),
+          resource_type: isRetail ? "Event" : "Visit",
+          resource_id: profileId,
+          metadata: { event_type: event.event_type, confidence, decision: "auto_commit" },
+        });
 
         // 2. Create event/visit node (vertical-aware)
         const nodeId = isRetail ? `evt_${uuidv4().slice(0, 8)}` : `visit_${uuidv4().slice(0, 8)}`;
@@ -144,7 +199,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ processed, skipped, failed, total: messages.length });
+    return NextResponse.json({ processed, skipped, failed, queued, rejected, total: messages.length });
   } catch (error) {
     return errorResponse(error);
   }

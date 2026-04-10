@@ -171,7 +171,7 @@ function mapNode(value: unknown, vertical: VerticalConfig): GraphNode | null {
     properties: sanitizeProps(props),
     displayName,
     color,
-    relevance: typeof props.relevance === "number" ? props.relevance : undefined,
+    relevance: computeNodeRelevance(props, label),
   };
 }
 
@@ -198,6 +198,51 @@ function getNodeId(props: Record<string, unknown>, label: string): string {
     if (props[f]) return String(props[f]);
   }
   return `${label}-${JSON.stringify(props).slice(0, 20)}`;
+}
+
+/**
+ * Compute node relevance with policy currency decay.
+ * Formula: confidence × recency_decay × policy_currency
+ *
+ * - confidence: extracted confidence_score (default 1.0)
+ * - recency_decay: exp(-0.01 × days_old) — events older than ~100 days score ~0.37
+ * - policy_currency: active=1.0, superseded=0.1, deprecated=0.3, else=0.6
+ */
+function computeNodeRelevance(props: Record<string, unknown>, label: string): number | undefined {
+  // Only score event/visit/policy nodes
+  if (!["Event", "Visit", "Policy", "Protocol"].includes(label)) {
+    return typeof props.relevance === "number" ? props.relevance : undefined;
+  }
+
+  const confidence = typeof props.confidence_score === "number" ? props.confidence_score : 1.0;
+
+  // Recency decay
+  let recencyDecay = 1.0;
+  const ts = props.timestamp || props.created_at;
+  if (ts) {
+    try {
+      const daysOld = (Date.now() - new Date(String(ts)).getTime()) / (1000 * 60 * 60 * 24);
+      recencyDecay = Math.exp(-0.01 * Math.max(0, daysOld));
+    } catch { /* ignore bad timestamps */ }
+  }
+
+  // Policy currency factor
+  let policyCurrency = 1.0;
+  const status = String(props.status || "").toLowerCase();
+  if (label === "Policy" || label === "Protocol") {
+    if (status === "superseded") policyCurrency = 0.1;
+    else if (status === "deprecated") policyCurrency = 0.3;
+    else if (status === "draft") policyCurrency = 0.6;
+    else policyCurrency = 1.0; // active
+  } else if (props.policy_status) {
+    // Event governed by a superseded policy
+    const ps = String(props.policy_status).toLowerCase();
+    if (ps === "superseded") policyCurrency = 0.1;
+    else if (ps === "deprecated") policyCurrency = 0.3;
+  }
+
+  const score = Math.round(confidence * recencyDecay * policyCurrency * 100) / 100;
+  return Math.max(0.01, Math.min(1.0, score));
 }
 
 function buildTimeline(nodes: GraphNode[]): TimelineEntry[] {
