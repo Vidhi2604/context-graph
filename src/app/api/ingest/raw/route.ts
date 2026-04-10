@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getOrgFromApiKey, errorResponse } from "@/lib/api-auth";
 import { getConfig } from "@/lib/ingest-configs";
 import { mapRawPayload } from "@/lib/raw-mapper";
-import { produceEvent, isKafkaConfigured } from "@/lib/kafka";
+import { produceToStream } from "@/lib/streams";
 import { TraceCollector } from "@/lib/trace";
 
 /**
@@ -73,20 +73,20 @@ export async function POST(req: NextRequest) {
       }, { status: 422 });
     }
 
-    // Produce to Kafka (or sync if Kafka not configured)
-    const kafkaConfigured = isKafkaConfigured();
+    // Force sync for raw ingest — stream consumer unreliable in dev
+    const streamsConfigured = false;
 
     let ingested = 0;
     let failed = 0;
 
-    if (kafkaConfigured) {
+    if (streamsConfigured) {
       // Async via Kafka
       await (trace
         ? trace.run("Kafka Produce", "produceBatch()", "kafka",
             `${validEvents.length} events → topic: events-${session.tenantId}`,
             async () => {
               for (const event of validEvents) {
-                await produceEvent(session.tenantId, {
+                await produceToStream(session.tenantId, {
                   ...event,
                   _vertical: session.vertical,
                 });
@@ -96,7 +96,7 @@ export async function POST(req: NextRequest) {
         : (async () => {
             for (const event of validEvents) {
               try {
-                await produceEvent(session.tenantId, { ...event!, _vertical: session.vertical });
+                await produceToStream(session.tenantId, { ...event!, _vertical: session.vertical });
                 ingested++;
               } catch { failed++; }
             }
@@ -110,13 +110,13 @@ export async function POST(req: NextRequest) {
               const baseUrl = `${req.nextUrl.protocol}//${req.nextUrl.host}`;
               for (const event of validEvents) {
                 try {
-                  await fetch(`${baseUrl}/api/events`, {
+                  await fetch(`${baseUrl}/api/events/process`, {
                     method: "POST",
                     headers: {
                       "Content-Type": "application/json",
-                      "Authorization": req.headers.get("Authorization")!,
+                      "x-org-id": session.orgId,
                     },
-                    body: JSON.stringify({ ...event, _vertical: session.vertical }),
+                    body: JSON.stringify({ events: [{ ...event, _vertical: session.vertical }] }),
                   });
                   ingested++;
                 } catch { failed++; }
@@ -144,7 +144,7 @@ export async function POST(req: NextRequest) {
       events_ingested: ingested,
       events_failed: failed,
       events_skipped: skipped,
-      mode: kafkaConfigured ? "async" : "sync",
+      mode: streamsConfigured ? "async" : "sync",
       client_config: clientKey || "default",
       ...(trace ? { _trace: trace.finalize("event_ingest", `raw ingest (${payloads.length} events)`) } : {}),
     };

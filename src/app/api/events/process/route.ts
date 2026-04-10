@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getOrgFromRequest, errorResponse } from "@/lib/api-auth";
 import { consumeFromStream, isStreamsConfigured } from "@/lib/streams";
+import { logActivity, completeActivity } from "@/lib/activity-log";
 import { resolveIdentity } from "@/lib/identity-resolver";
 import { runQuery } from "@/lib/neo4j";
 import { createCommitment } from "@/lib/commitment-tracker";
@@ -15,13 +16,28 @@ export async function POST(req: NextRequest) {
   try {
     const session = await getOrgFromRequest(req);
 
-    // Pull from Redis Streams if configured, otherwise read from request body
+    // Body events take priority (sync mode / direct call)
+    // Stream poll used only when no body events provided (async consumer trigger)
+    const body = await req.json().catch(() => ({}));
     let messages: Record<string, unknown>[];
-    if (isStreamsConfigured()) {
+
+    const groupId = `process_${Date.now()}`;
+
+    if (Array.isArray(body.events) && body.events.length > 0) {
+      messages = body.events;
+    } else if (isStreamsConfigured()) {
+      const redisId = logActivity(session.tenantId, {
+        layer: "redis",
+        label: "Redis XREAD",
+        detail: `stream:${session.tenantId} · consuming`,
+        status: "running",
+        started_at: Date.now(),
+        group_id: groupId,
+      });
       messages = await consumeFromStream(session.tenantId);
+      completeActivity(session.tenantId, redisId, "success", `${messages.length} messages consumed`);
     } else {
-      const body = await req.json().catch(() => ({}));
-      messages = Array.isArray(body.events) ? body.events : body.event ? [body.event] : [];
+      messages = [];
     }
 
     const isRetail = session.vertical === "retail";
@@ -90,12 +106,26 @@ export async function POST(req: NextRequest) {
 
         // 2. Create event/visit node (vertical-aware)
         const nodeId = isRetail ? `evt_${uuidv4().slice(0, 8)}` : `visit_${uuidv4().slice(0, 8)}`;
+        const neo4jId = logActivity(session.tenantId, {
+          layer: "neo4j",
+          label: "Neo4j Write",
+          detail: `${isRetail ? "Event" : "Visit"} node · profile: ${profileId} · type: ${String(event.event_type || "unknown")}`,
+          status: "running",
+          started_at: Date.now(),
+          group_id: groupId,
+        });
         const timestamp = (event.timestamp as string) || new Date().toISOString();
 
-        if (isRetail) {
-          await createRetailEvent(nodeId, profileId, event, timestamp, session.tenantId);
-        } else {
-          await createHealthcareVisit(nodeId, profileId, event, timestamp, session.tenantId);
+        try {
+          if (isRetail) {
+            await createRetailEvent(nodeId, profileId, event, timestamp, session.tenantId);
+          } else {
+            await createHealthcareVisit(nodeId, profileId, event, timestamp, session.tenantId);
+          }
+          completeActivity(session.tenantId, neo4jId, "success", `node: ${nodeId}`);
+        } catch (e) {
+          completeActivity(session.tenantId, neo4jId, "error", e instanceof Error ? e.message : "write failed");
+          throw e;
         }
 
         // 3. Link to product (retail) or diagnosis (healthcare)

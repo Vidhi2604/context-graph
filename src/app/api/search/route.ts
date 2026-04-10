@@ -7,19 +7,23 @@ import { mapNeo4jToGraph } from "@/lib/graph-mapper";
 import { getVertical } from "@/verticals/registry";
 import { PLANS } from "@/lib/plans";
 import { TraceCollector } from "@/lib/trace";
-import { getDemoResponse } from "@/lib/demo-cache";
+
 import { checkRateLimit } from "@/lib/rate-limit";
+import { getStreamInfo, isStreamsConfigured } from "@/lib/streams";
+import { logActivity, completeActivity } from "@/lib/activity-log";
 
 export async function POST(req: NextRequest) {
   try {
     const traceEnabled = req.nextUrl.searchParams.get("trace") === "true";
     const trace = traceEnabled ? new TraceCollector() : null;
 
+    const t0 = Date.now();
     const session = await (trace
       ? trace.run("Auth & Tenant Resolution", "getOrgFromRequest()", "auth",
           "session cookie / API key",
           () => getOrgFromRequest(req))
       : getOrgFromRequest(req));
+    logActivity(session.tenantId, { layer: "auth", label: "Auth & Tenant Resolution", detail: `org: ${session.orgId}`, status: "success", started_at: t0, ended_at: Date.now(), duration_ms: Date.now() - t0 });
 
     const { success } = await checkRateLimit(`search:${session.tenantId}`, 30, 60);
     if (!success) return NextResponse.json({ error: "Rate limit exceeded" }, { status: 429 });
@@ -35,16 +39,18 @@ export async function POST(req: NextRequest) {
     }
 
     const plan = PLANS[session.plan];
+    const t1 = Date.now();
     const vertical = await (trace
       ? trace.run("Vertical Schema Load", "getVertical()", "validation",
           `vertical: ${session.vertical}`,
           async () => getVertical(session.vertical))
       : Promise.resolve(getVertical(session.vertical)));
+    logActivity(session.tenantId, { layer: "auth", label: "Vertical Schema Load", detail: `vertical: ${session.vertical} · plan: ${session.plan}`, status: "success", started_at: t1, ended_at: Date.now(), duration_ms: Date.now() - t1 });
 
     // Plan gating
     if (plan.searchType === "basic") {
       trace?.skip("LLM Cypher Generation", "generateCypher()", "llm", "Starter plan — basic search only");
-      const result = await handleBasicSearch(parsed.data.query, session.tenantId, vertical, trace, Math.min(parsed.data.limit, plan.maxGraphNodes));
+      const result = await handleBasicSearch(parsed.data.query, session.tenantId, vertical, trace, Math.floor(Math.min(parsed.data.limit, plan.maxGraphNodes === Infinity ? 200 : plan.maxGraphNodes)));
       if (trace) {
         const traceData = trace.finalize("search", parsed.data.query);
         const json = await result.json();
@@ -53,33 +59,22 @@ export async function POST(req: NextRequest) {
       return result;
     }
 
-    // Demo cache check — bypass LLM+Neo4j for instant demo responses
-    const cached = getDemoResponse(parsed.data.query, session.tenantId);
-    if (cached) {
-      trace?.skip("LLM Cypher Generation", "getDemoResponse()", "llm", "Demo cache hit");
-      return NextResponse.json({
-        query: parsed.data.query,
-        cypher: "demo_cache",
-        cypher_confidence: 1.0,
-        interpretation: `Demo response for "${parsed.data.query}"`,
-        results: cached,
-        _demo: true,
-        ...(trace ? { _trace: trace.finalize("search", parsed.data.query) } : {}),
-      });
-    }
+
 
     // LLM → Cypher
+    const llmActId = logActivity(session.tenantId, { layer: "llm", label: "LLM Cypher Generation", detail: `query: "${parsed.data.query}"`, status: "running", started_at: Date.now() });
     const cypherResult = await (trace
       ? trace.run("LLM Cypher Generation", "generateCypher()", "llm",
-          `query: "${parsed.data.query}", model: llama-3.3-70b`,
+          `query: "${parsed.data.query}", model: claude-haiku-4-5`,
           () => generateCypher(parsed.data.query, session.tenantId, session.vertical,
-                               Math.min(parsed.data.limit, plan.maxGraphNodes)))
+                               Math.floor(Math.min(parsed.data.limit, plan.maxGraphNodes === Infinity ? 200 : plan.maxGraphNodes))))
       : generateCypher(parsed.data.query, session.tenantId, session.vertical,
-                       Math.min(parsed.data.limit, plan.maxGraphNodes)));
+                       Math.floor(Math.min(parsed.data.limit, plan.maxGraphNodes === Infinity ? 200 : plan.maxGraphNodes))));
+    completeActivity(session.tenantId, llmActId, cypherResult.isValid ? "success" : "error", cypherResult.isValid ? `cypher generated, confidence: ${cypherResult.cypher_confidence}` : cypherResult.error);
 
     if (!cypherResult.isValid) {
       trace?.skip("Cypher Validation", "validateCypher()", "validation", `Failed: ${cypherResult.error}. Falling back.`);
-      return handleBasicSearch(parsed.data.query, session.tenantId, vertical, trace, Math.min(parsed.data.limit, plan.maxGraphNodes));
+      return handleBasicSearch(parsed.data.query, session.tenantId, vertical, trace, Math.floor(Math.min(parsed.data.limit, plan.maxGraphNodes === Infinity ? 200 : plan.maxGraphNodes)));
     }
 
     await (trace
@@ -89,18 +84,20 @@ export async function POST(req: NextRequest) {
       : Promise.resolve());
 
     // Execute primary query
+    const neo4jActId = logActivity(session.tenantId, { layer: "neo4j", label: "Neo4j Query", detail: `cypher: ${cypherResult.cypher.slice(0, 80)}…`, status: "running", started_at: Date.now() });
     const primaryRecords = await (trace
       ? trace.run("Neo4j Execution", "runQuery()", "neo4j",
           `cypher length: ${cypherResult.cypher.length} chars`,
           () => runQuery(cypherResult.cypher))
       : runQuery(cypherResult.cypher));
+    completeActivity(session.tenantId, neo4jActId, "success", `${primaryRecords.length} records`);
 
     // Extract profile IDs from results, apply filters, expand to full context
     let profileIds = extractProfileIds(primaryRecords);
 
     // Apply structured filters to narrow profile IDs
     if (Object.keys(activeFilters).length > 0 && profileIds.length > 0) {
-      profileIds = await applyFilters(profileIds, activeFilters, session.tenantId);
+      profileIds = await applyFilters(profileIds, activeFilters, session.tenantId, session.vertical);
     }
 
     const contextRecords = profileIds.length > 0
@@ -123,6 +120,9 @@ export async function POST(req: NextRequest) {
     // Relevance scoring (already computed inside mapNeo4jToGraph via Cypher)
     trace?.skip("Relevance Scoring", "computeRelevance()", "scoring",
       `Computed inline — avg: ${(graph.nodes.reduce((s, n) => s + (n.relevance ?? 0.7), 0) / Math.max(graph.nodes.length, 1)).toFixed(2)}`);
+
+    // Show Redis Streams state in trace
+    if (trace) await addRedisTrace(trace, session.tenantId);
 
     const response = {
       query: parsed.data.query,
@@ -167,10 +167,12 @@ async function handleBasicSearch(
 async function applyFilters(
   profileIds: string[],
   filters: Record<string, string[]>,
-  tenantId: string
+  tenantId: string,
+  vertical = "retail"
 ): Promise<string[]> {
   const params: Record<string, unknown> = { profileIds, tenantId };
 
+  // Use cypherField from vertical schema if available, else fallback map
   const FILTER_FIELD_MAP: Record<string, string> = {
     tier: "p.tier",
     city: "p.city",
@@ -184,15 +186,26 @@ async function applyFilters(
     visitType: "v.type",
   };
 
+  // Try to get cypherField from vertical schema
+  const verticalConfig = (() => { try { return getVertical(vertical); } catch { return null; } })();
+  const schemaCypherFields: Record<string, string> = {};
+  if (verticalConfig) {
+    for (const f of verticalConfig.filters) {
+      if (f.cypherField) schemaCypherFields[f.id] = f.cypherField;
+    }
+  }
+
   const profileOnlyFilters = ["tier", "city"];
   const needsEventJoin = Object.keys(filters).some(k => !profileOnlyFilters.includes(k) && filters[k].length > 0);
 
-  // Build filter conditions (excluding the base ones already in MATCH)
   const filterConditions: string[] = [];
   for (const [filterId, values] of Object.entries(filters)) {
     if (!values || values.length === 0) continue;
-    const field = FILTER_FIELD_MAP[filterId];
+    if (filterId === "dateRange") continue;
+    let field = schemaCypherFields[filterId] || FILTER_FIELD_MAP[filterId];
     if (!field) continue;
+    // The event join uses alias `e` — remap v./visit alias to e.
+    field = field.replace(/^v\./, "e.");
     const paramKey = `filter_${filterId}`;
     filterConditions.push(`(${field} IN $${paramKey})`);
     params[paramKey] = values;
@@ -201,20 +214,27 @@ async function applyFilters(
   let cypher = `MATCH (p:Profile {_tenant: $tenantId})
     WHERE p.profile_id IN $profileIds`;
 
-  if (needsEventJoin) {
+  // Profile-level filters can go directly in WHERE
+  const profileConditions = filterConditions.filter(c =>
+    c.includes("p.tier") || c.includes("p.city")
+  );
+  const eventConditions = filterConditions.filter(c =>
+    !c.includes("p.tier") && !c.includes("p.city")
+  );
+
+  if (profileConditions.length > 0) {
+    cypher += ` AND ${profileConditions.join(" AND ")}`;
+  }
+
+  if (needsEventJoin && eventConditions.length > 0) {
     cypher += `
     WITH p
-    OPTIONAL MATCH (p)-[:PERFORMED|HAD_VISIT]->(e)
+    MATCH (p)-[:PERFORMED|HAD_VISIT]->(e)
     OPTIONAL MATCH (e)-[:INVOLVES]->(prod:Product)
     OPTIONAL MATCH (e)-[:PAID_VIA]->(pay:Payment)
     OPTIONAL MATCH (e)-[:CLAIMED_VIA]->(ic:InsuranceClaim)
     OPTIONAL MATCH (e)-[:DIAGNOSED_WITH]->(d:Diagnosis)
-    WITH p, e, prod, pay, ic, d`;
-  }
-
-  if (filterConditions.length > 0) {
-    cypher += `
-    WHERE ${filterConditions.join(" AND ")}`;
+    WHERE ${eventConditions.join(" AND ")}`;
   }
 
   cypher += `
@@ -288,21 +308,33 @@ function expandProfileContext(profileIds: string[], tenantId: string, vertical: 
   );
 }
 
+
+async function addRedisTrace(trace: TraceCollector, tenantId: string) {
+  if (!isStreamsConfigured()) {
+    trace.skip("Redis Stream", "getStreamInfo()", "streams", "Upstash not configured");
+    return;
+  }
+  await trace.run("Redis Stream", "getStreamInfo()", "streams", `tenant: ${tenantId}`, async () => {
+    const info = await getStreamInfo(tenantId);
+    return `stream:${tenantId} · ${info.length} msgs · last_id: ${info.last_id}`;
+  });
+}
+
 function runBasicSearch(query: string, tenantId: string, limit = 25) {
   return runQuery(
     `
     MATCH (p:Profile {_tenant: $tenantId})
-    WHERE p.name CONTAINS $query OR p.profile_id CONTAINS $query
-    WITH p
-    UNION
-    MATCH (i:Identity {_tenant: $tenantId})<-[:HAS_IDENTITY]-(p:Profile {_tenant: $tenantId})
-    WHERE i.value CONTAINS $query
-    WITH p
+    WHERE p.name CONTAINS $query
+       OR p.profile_id CONTAINS $query
+       OR EXISTS {
+         MATCH (p)-[:HAS_IDENTITY]->(i:Identity {_tenant: $tenantId})
+         WHERE i.value CONTAINS $query
+       }
     WITH DISTINCT p LIMIT $limit
-    OPTIONAL MATCH (p)-[r]-(connected)
+    OPTIONAL MATCH path = (p)-[r]-(connected)
     WHERE connected._tenant = $tenantId
-    RETURN p, r, connected
+    RETURN p, r, connected, path
     `,
-    { query, tenantId, limit }
+    { query, tenantId, limit: Math.floor(limit) }
   );
 }

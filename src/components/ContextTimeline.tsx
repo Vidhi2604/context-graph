@@ -22,7 +22,6 @@ const EVENT_COLORS: Record<string, string> = {
   refund_issued:      "#eab308",
   support_ticket:     "#f43f5e",
   review_submitted:   "#a855f7",
-  // Healthcare
   visit:              "#3b82f6",
   Emergency:          "#ef4444",
   Inpatient:          "#f97316",
@@ -41,7 +40,6 @@ function formatTimestamp(ts: string): { date: string; time: string; relative: st
     const now = new Date();
     const diffMs = now.getTime() - d.getTime();
     const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
     const date = d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
     const time = d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true });
     const relative = diffDays === 0 ? "Today"
@@ -50,18 +48,15 @@ function formatTimestamp(ts: string): { date: string; time: string; relative: st
       : diffDays < 30 ? `${Math.floor(diffDays / 7)}w ago`
       : diffDays < 365 ? `${Math.floor(diffDays / 30)}mo ago`
       : `${Math.floor(diffDays / 365)}y ago`;
-
     return { date, time, relative };
   } catch {
     return { date: "—", time: "—", relative: "—" };
   }
 }
 
-// Detect if search is for a specific person vs aggregate
 function isPersonSearch(nodes: GraphNode[]): boolean {
   const profiles = nodes.filter(n => n.label === "Profile");
   const events = nodes.filter(n => n.label === "Event" || n.label === "Visit");
-  // If ≤3 profiles and has events — specific person search
   return profiles.length <= 3 && events.length > 0;
 }
 
@@ -69,99 +64,81 @@ export default function ContextTimeline({ nodes, query, onEventClick }: ContextT
   const eventNodes = useMemo(() =>
     nodes
       .filter(n => (n.label === "Event" || n.label === "Visit") && n.properties.timestamp)
-      .sort((a, b) => {
-        const ta = String(a.properties.timestamp);
-        const tb = String(b.properties.timestamp);
-        return ta.localeCompare(tb);
-      }),
+      .sort((a, b) => String(a.properties.timestamp).localeCompare(String(b.properties.timestamp))),
     [nodes]
   );
-
-  const profileMap = useMemo(() => {
-    const map: Record<string, string> = {};
-    nodes.filter(n => n.label === "Profile").forEach(p => { map[p.id] = p.displayName; });
-    return map;
-  }, [nodes]);
 
   if (eventNodes.length === 0) return null;
 
   const isPerson = isPersonSearch(nodes);
 
-  if (isPerson) {
-    return <PersonTimeline events={eventNodes} profileMap={profileMap} onEventClick={onEventClick} />;
-  }
-
-  return <AggregateTimeline events={eventNodes} query={query} onEventClick={onEventClick} />;
+  return (
+    <div className="h-full flex flex-col min-h-0">
+      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 shrink-0">
+        Timeline · {eventNodes.length} events
+      </p>
+      <div className="flex-1 min-h-0 overflow-y-auto pr-1">
+        {isPerson
+          ? <PersonTimeline events={eventNodes} onEventClick={onEventClick} />
+          : <AggregateTimeline events={eventNodes} query={query} onEventClick={onEventClick} />
+        }
+      </div>
+    </div>
+  );
 }
 
-// ── Individual timeline (specific person) ────────────────────────
+// ── Person Timeline ──────────────────────────────────────────────────
 
-function PersonTimeline({
-  events,
-  onEventClick,
-}: {
+function PersonTimeline({ events, onEventClick }: {
   events: GraphNode[];
-  profileMap?: Record<string, string>;
   onEventClick?: (node: GraphNode) => void;
 }) {
   return (
-    <div className="space-y-2">
-      <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Timeline</h3>
-      <div className="relative pl-4 space-y-0 max-h-[560px] overflow-y-auto pr-1">
-        {/* Vertical line */}
-        <div className="absolute left-[7px] top-2 bottom-2 w-px bg-gray-800" />
+    <div className="relative">
+      {/* Vertical line */}
+      <div className="absolute left-[11px] top-0 bottom-0 w-px bg-gray-800" />
 
+      <div className="space-y-3 pl-8">
         {events.map((evt) => {
           const ts = formatTimestamp(String(evt.properties.timestamp));
           const type = String(evt.properties.event_type || evt.properties.type || evt.label);
           const color = getEventColor(type);
           const amount = evt.properties.amount as number | null | undefined;
-          const isBreached = Boolean(evt.properties.exception || evt.properties.deviated);
-          const confidence = evt.properties.confidence_score as number | undefined;
+          const label = type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
 
           return (
-            <div key={evt.id} className="relative flex gap-3 group">
+            <div key={evt.id} className="relative flex items-start gap-0">
               {/* Dot */}
               <div
-                className="relative z-10 w-3.5 h-3.5 rounded-full border-2 border-gray-950 mt-2 shrink-0 cursor-pointer group-hover:scale-125 transition-transform"
-                style={{ backgroundColor: isBreached ? "#ef4444" : color }}
+                className="absolute -left-8 mt-[18px] w-[14px] h-[14px] rounded-full shrink-0 z-10"
+                style={{ backgroundColor: color }}
               />
 
-              {/* Content */}
+              {/* Card */}
               <button
                 onClick={() => onEventClick?.(evt)}
-                className="flex-1 text-left bg-gray-900/50 hover:bg-gray-800/80 border border-gray-800/50 rounded-lg px-3 py-2 mb-2 transition-colors"
+                className="w-full text-left bg-gray-900 hover:bg-gray-800 border border-gray-800 rounded-2xl px-4 py-3.5 transition-colors"
               >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <span
-                        className="text-xs font-medium capitalize"
-                        style={{ color }}
-                      >
-                        {type.replace(/_/g, " ")}
-                      </span>
-                      {isBreached && (
-                        <span className="text-[9px] bg-red-900/40 text-red-400 px-1 rounded">exception</span>
-                      )}
-                    </div>
-                    {amount && (
-                      <div className="text-[10px] text-gray-400 mt-0.5">
-                        ₹{Number(amount).toLocaleString()}
-                      </div>
+                <div className="flex items-start justify-between gap-4">
+                  {/* Left: type + amount */}
+                  <div>
+                    <p className="text-sm font-semibold" style={{ color }}>
+                      {label}
+                    </p>
+                    {amount != null && amount > 0 && (
+                      <p className="text-sm text-gray-400 mt-0.5">
+                        ₹{Number(amount).toLocaleString("en-IN")}
+                      </p>
                     )}
                   </div>
+
+                  {/* Right: date / time / relative */}
                   <div className="text-right shrink-0">
-                    <div className="text-[10px] text-gray-400">{ts.date}</div>
-                    <div className="text-[10px] text-gray-600">{ts.time}</div>
-                    <div className="text-[9px] text-gray-700">{ts.relative}</div>
+                    <p className="text-sm text-gray-300">{ts.date}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">{ts.time}</p>
+                    <p className="text-xs text-gray-700 mt-0.5">{ts.relative}</p>
                   </div>
                 </div>
-                {confidence != null && (
-                  <div className="text-[9px] text-gray-700 mt-1">
-                    confidence: {Math.round(confidence * 100)}%
-                  </div>
-                )}
               </button>
             </div>
           );
@@ -171,81 +148,107 @@ function PersonTimeline({
   );
 }
 
-// ── Aggregate timeline (category/product search) ─────────────────
+// ── Aggregate Timeline ───────────────────────────────────────────────
 
-function AggregateTimeline({
-  events,
-  onEventClick,
-}: {
+function AggregateTimeline({ events, onEventClick }: {
   events: GraphNode[];
   query?: string;
   onEventClick?: (node: GraphNode) => void;
 }) {
-  // Group by date
   const byDate = useMemo(() => {
     const map: Record<string, GraphNode[]> = {};
     for (const evt of events) {
-      const ts = String(evt.properties.timestamp);
-      const date = ts.slice(0, 10);
+      const date = String(evt.properties.timestamp).slice(0, 10);
       if (!map[date]) map[date] = [];
       map[date].push(evt);
     }
     return Object.entries(map).sort(([a], [b]) => a.localeCompare(b));
   }, [events]);
 
+  // Event type breakdown
+  const typeCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const evt of events) {
+      const type = String(evt.properties.event_type || evt.properties.type || evt.label || "unknown");
+      counts[type] = (counts[type] || 0) + 1;
+    }
+    return Object.entries(counts).sort(([, a], [, b]) => b - a).slice(0, 5);
+  }, [events]);
+
   const maxCount = Math.max(...byDate.map(([, evts]) => evts.length), 1);
-  const totalAmount = events.reduce((s, e) => s + (Number(e.properties.amount) || 0), 0);
+  const avgPerDay = events.length / Math.max(byDate.length, 1);
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Timeline</h3>
-        <span className="text-[10px] text-gray-600">{events.length} events</span>
+    <div className="flex flex-col">
+      {/* Summary row */}
+      <div className="flex items-center justify-between mb-3 shrink-0">
+        <div className="flex flex-wrap gap-1.5">
+          {typeCounts.map(([type, count]) => (
+            <span
+              key={type}
+              className="text-[10px] px-2 py-0.5 rounded-full font-medium"
+              style={{ backgroundColor: `${getEventColor(type)}22`, color: getEventColor(type) }}
+            >
+              {type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())} {count}
+            </span>
+          ))}
+        </div>
+        <span className="text-[10px] text-gray-600 shrink-0 ml-2">{events.length} · {byDate.length}d</span>
       </div>
 
-      {totalAmount > 0 && (
-        <div className="text-xs text-gray-500 bg-gray-900 rounded-lg px-3 py-1.5">
-          Total: <span className="text-white font-medium">₹{totalAmount.toLocaleString()}</span>
-        </div>
-      )}
+      {/* Bar chart rows */}
+      <div className="relative">
+        <div className="absolute left-[11px] top-0 bottom-0 w-px bg-gray-800" />
 
-      <div className="space-y-1 max-h-[500px] overflow-y-auto pr-1">
-        {byDate.map(([date, dayEvents]) => {
-          const d = new Date(date);
-          const label = d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
-          const dayAmount = dayEvents.reduce((s, e) => s + (Number(e.properties.amount) || 0), 0);
-          const barWidth = Math.max(4, (dayEvents.length / maxCount) * 100);
-          const hasSpike = dayEvents.length > (events.length / byDate.length) * 1.5;
+        <div className="space-y-2 pl-8">
+          {byDate.map(([date, dayEvents]) => {
+            const d = new Date(date);
+            const label = d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+            const barPct = Math.max(8, (dayEvents.length / maxCount) * 100);
+            const hasSpike = dayEvents.length > avgPerDay * 1.5 && avgPerDay > 0;
+            const topType = String(dayEvents[0]?.properties.event_type || dayEvents[0]?.properties.type || "visit");
+            const barColor = hasSpike ? "#ef4444" : getEventColor(topType);
+            const topAmount = dayEvents.reduce((s, e) => s + (Number(e.properties.amount) || 0), 0);
 
-          return (
-            <div key={date} className="flex items-center gap-2 group">
-              {/* Date */}
-              <div className="text-[10px] text-gray-500 w-14 shrink-0 text-right font-mono">{label}</div>
-
-              {/* Bar */}
-              <div className="flex-1 relative">
+            return (
+              <div key={date} className="relative flex items-start gap-0">
+                {/* Dot */}
                 <div
-                  className="h-5 rounded transition-all cursor-pointer hover:opacity-90"
-                  style={{
-                    width: `${barWidth}%`,
-                    backgroundColor: hasSpike ? "#ef4444" : "#3b82f6",
-                    minWidth: "4px",
-                  }}
-                  onClick={() => dayEvents[0] && onEventClick?.(dayEvents[0])}
+                  className="absolute -left-8 mt-[10px] w-[10px] h-[10px] rounded-full shrink-0 z-10"
+                  style={{ backgroundColor: barColor }}
                 />
-              </div>
 
-              {/* Count + spike indicator */}
-              <div className="flex items-center gap-1 w-20 shrink-0">
-                <span className="text-[10px] text-gray-400">{dayEvents.length}</span>
-                {hasSpike && <span className="text-[9px] text-red-400">↑ spike</span>}
-                {dayAmount > 0 && (
-                  <span className="text-[9px] text-gray-600">₹{(dayAmount/1000).toFixed(0)}k</span>
-                )}
+                {/* Card */}
+                <button
+                  onClick={() => dayEvents[0] && onEventClick?.(dayEvents[0])}
+                  className="w-full text-left bg-gray-900 hover:bg-gray-800 border border-gray-800 rounded-2xl px-4 py-3 transition-colors"
+                >
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      {/* Bar */}
+                      <div className="w-full bg-gray-800 rounded-full h-2 mb-2">
+                        <div
+                          className="h-2 rounded-full transition-all"
+                          style={{ width: `${barPct}%`, backgroundColor: barColor }}
+                        />
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-400">{dayEvents.length} event{dayEvents.length > 1 ? "s" : ""}</span>
+                        {hasSpike && <span className="text-[10px] text-red-400">↑ spike</span>}
+                        {topAmount > 0 && (
+                          <span className="text-[10px] text-gray-600">₹{(topAmount / 1000).toFixed(0)}k</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="text-sm text-gray-300">{label}</p>
+                    </div>
+                  </div>
+                </button>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
     </div>
   );

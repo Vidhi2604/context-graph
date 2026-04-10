@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import SearchBar from "@/components/SearchBar";
 import ContextGraph from "@/components/ContextGraph";
@@ -9,7 +10,7 @@ import ContextTimeline from "@/components/ContextTimeline";
 import NodeDetail from "@/components/NodeDetail";
 import InsightPanel from "@/components/InsightPanel";
 import ValueBar from "@/components/ValueBar";
-import TracePanel from "@/components/TracePanel";
+import ActivityPanel from "@/components/ActivityPanel";
 import FilterBar from "@/components/FilterBar";
 import OrgSwitcher from "@/components/OrgSwitcher";
 import Logo from "@/components/Logo";
@@ -18,7 +19,9 @@ import { PipelineTrace } from "@/lib/trace";
 import { getVertical } from "@/verticals/registry";
 
 export default function DashboardPage() {
+  const router = useRouter();
   const [graph, setGraph] = useState<GraphResult | null>(null);
+  const [similarSourceId, setSimilarSourceId] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [insight, setInsight] = useState<InsightResponse | null>(null);
   const [stats, setStats] = useState(null);
@@ -27,21 +30,38 @@ export default function DashboardPage() {
   const [insightLoading, setInsightLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [debugMode, setDebugMode] = useState(false);
-  const [trace, setTrace] = useState<PipelineTrace | null>(null);
+  const [activityKey, setActivityKey] = useState(0);
+  const [, setTrace] = useState<PipelineTrace | null>(null);
   const [lastQuery, setLastQuery] = useState("");
   const [activeFilters, setActiveFilters] = useState<Record<string, string[]>>({});
 
-  const { data: session } = useSession();
+  const { data: session, status } = useSession({
+    required: true,
+    onUnauthenticated() {
+      router.push("/auth/signin");
+    },
+  });
 
-  // localStorage always takes priority (user may have switched org manually)
-  // Session is only used if localStorage is empty
-  const lsOrgId = typeof window !== "undefined" ? localStorage.getItem("orgId") || "" : "";
-  const lsVertical = typeof window !== "undefined" ? localStorage.getItem("vertical") || "" : "";
-  const lsPlan = typeof window !== "undefined" ? localStorage.getItem("plan") || "" : "";
+  const [lsOrgId, setLsOrgId] = useState("");
+  const [lsVertical, setLsVertical] = useState("");
+  const [lsPlan, setLsPlan] = useState("");
+
+  useEffect(() => {
+    setLsOrgId(localStorage.getItem("orgId") || "");
+    setLsVertical(localStorage.getItem("vertical") || "");
+    setLsPlan(localStorage.getItem("plan") || "");
+  }, []);
 
   const orgId = lsOrgId || session?.orgId || "";
   const vertical = lsVertical || session?.vertical || "retail";
   const plan = lsPlan || session?.plan || "enterprise";
+
+  // Redirect to onboarding if authenticated but no org yet
+  useEffect(() => {
+    if (status === "authenticated" && !orgId) {
+      router.push("/onboarding");
+    }
+  }, [status, orgId, router]);
 
   // Safe vertical config — fallback to retail if unknown vertical value
   const verticalConfig = (() => {
@@ -54,6 +74,7 @@ export default function DashboardPage() {
   }, []);
 
   const handleFilterClear = useCallback(() => setActiveFilters({}), []);
+
 
   // Sync session → localStorage on first load (when localStorage is empty)
   useEffect(() => {
@@ -74,38 +95,29 @@ export default function DashboardPage() {
   }, [orgId]);
 
   const handleSearch = useCallback(async (query: string) => {
+    setActivityKey(k => k + 1);
     setLoading(true);
     setError(null);
     setGraph(null);
     setSelectedNode(null);
     setInsight(null);
+    setSimilarSourceId(null);
     setCypherInfo(null);
     setTrace(null);
-
-    // Append active filters to query as natural language context
-    const filterParts = Object.entries(activeFilters)
-      .filter(([, v]) => v.length > 0)
-      .map(([k, v]) => {
-        if (k === "dateRange") return `last ${v[0]}`;
-        return `${k.replace(/([A-Z])/g, " $1").toLowerCase()}: ${v.join(" or ")}`;
-      });
-    const enrichedQuery = filterParts.length > 0
-      ? `${query} (${filterParts.join(", ")})`
-      : query;
 
     try {
       const url = `/api/search${debugMode ? "?trace=true" : ""}`;
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-org-id": orgId },
-        body: JSON.stringify({ query: enrichedQuery, limit: 50, filters: activeFilters }),
+        body: JSON.stringify({ query, limit: 50 }),
       });
       const data = await res.json();
 
       if (!res.ok) { setError(data.error || "Search failed"); return; }
 
       setGraph(data.results);
-      setLastQuery(enrichedQuery);
+      setLastQuery(query);
       setCypherInfo({ cypher: data.cypher, confidence: data.cypher_confidence, interpretation: data.interpretation });
       if (data._trace) setTrace(data._trace);
     } catch {
@@ -113,19 +125,53 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, [orgId, debugMode]);
+  }, [orgId, debugMode, activeFilters]);
+
+  // Filters are client-side — derive filtered graph from full graph
+  const filteredGraph = useMemo(() => {
+    if (!graph) return null;
+    const hasFilters = Object.values(activeFilters).some(v => v.length > 0);
+    if (!hasFilters) return graph;
+
+    const FILTER_PROP_MAP: Record<string, string> = {
+      department: "department", priority: "priority", severity: "severity",
+      visitType: "type", claimStatus: "status",
+      tier: "tier", city: "city", category: "category", payment: "method", status: "status",
+    };
+
+    const filteredNodes = graph.nodes.filter(n => {
+      // Always keep Profile and Search nodes
+      if (n.label === "Profile" || n.label === "SEARCH") return true;
+      for (const [filterId, values] of Object.entries(activeFilters)) {
+        if (!values.length) continue;
+        const prop = FILTER_PROP_MAP[filterId];
+        if (!prop) continue;
+        const nodeVal = String(n.properties?.[prop] || "");
+        if (!values.includes(nodeVal)) return false;
+      }
+      return true;
+    });
+
+    const nodeIds = new Set(filteredNodes.map(n => n.id));
+    const filteredEdges = graph.edges.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target));
+
+    return { ...graph, nodes: filteredNodes, edges: filteredEdges,
+      summary: { ...graph.summary, total_nodes: filteredNodes.length, total_edges: filteredEdges.length } };
+  }, [graph, activeFilters]);
 
   const handleRecenter = useCallback(async (node: GraphNode) => {
     setLoading(true);
     setSelectedNode(null);
+    setError(null);
     try {
       const res = await fetch("/api/graph/explore", {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-org-id": orgId },
         body: JSON.stringify({ node_id: node.id, node_label: node.label, depth: 2 }),
       });
+      if (!res.ok) throw new Error("Explore failed");
       const data = await res.json();
-      setGraph(data);
+      if (data.nodes) setGraph(data);
     } catch {
       setError("Failed to explore node");
     } finally {
@@ -134,21 +180,26 @@ export default function DashboardPage() {
   }, [orgId]);
 
   const handleAnalyze = useCallback(async (node?: GraphNode) => {
+    const activeOrgId = localStorage.getItem("orgId") || orgId;
+    if (!activeOrgId) return;
     setInsightLoading(true);
+    setInsight(null);
     try {
       const url = `/api/insights${debugMode ? "?trace=true" : ""}`;
       const res = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-org-id": orgId },
+        headers: { "Content-Type": "application/json", "x-org-id": activeOrgId },
         body: JSON.stringify({
-          query: node ? `Analyze ${node.label}: ${node.displayName}` : "Analyze current graph",
-          nodes: graph?.nodes || [],
+          query: node ? `Analyze ${node.label}: ${node.displayName}` : lastQuery || "Analyze current graph",
+          nodes: graph?.nodes?.slice(0, 20) || [],
         }),
       });
+      if (!res.ok) { setError("Analysis failed — try again"); return; }
       const data = await res.json();
+      // Normalise response shape — API can return flat or nested
       const insightData = data.result
-        ? { context: data.context || { summary: "", data_points: [], graph_scope: "" }, reasoning: data.reasoning || [], result: data.result }
-        : data;
+        ? { context: data.context || { summary: "", data_points: [], graph_scope: "" }, reasoning: data.reasoning || [], result: data.result, confidence: data.confidence }
+        : { context: null, reasoning: [], result: { finding: data.summary || data.insight || "Analysis complete", recommendation: "", confidence: data.confidence || 0.8 }, confidence: data.confidence || 0.8 };
       setInsight(insightData);
       if (data._trace) setTrace(data._trace);
     } catch {
@@ -156,16 +207,53 @@ export default function DashboardPage() {
     } finally {
       setInsightLoading(false);
     }
-  }, [orgId, graph, debugMode]);
+  }, [orgId, graph, debugMode, lastQuery]);
 
   const handleFindSimilar = useCallback(async (node: GraphNode) => {
+    const activeOrgId = localStorage.getItem("orgId") || orgId;
+    if (!activeOrgId) return;
     setLoading(true);
+    setError(null);
     try {
-      await fetch("/api/search/similar", {
+      const res = await fetch("/api/search/similar", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-org-id": orgId },
+        headers: { "Content-Type": "application/json", "x-org-id": activeOrgId },
         body: JSON.stringify({ node_id: node.id, node_label: node.label, limit: 5 }),
       });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.similar?.length > 0) {
+        const toNum = (v: unknown): number => {
+          if (typeof v === "number") return v;
+          if (v && typeof v === "object" && "low" in v) return (v as {low:number}).low;
+          return 0;
+        };
+
+        // Get name of most similar node and search for it
+        const firstProps = (data.similar[0]?.node?.properties || {}) as Record<string, unknown>;
+        const similarName = String(firstProps.name || firstProps.profile_id || firstProps.visit_id || "");
+        const sharedCount = toNum(data.similar[0]?.shared_connections);
+
+        if (similarName) {
+          const searchRes = await fetch("/api/search", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-org-id": activeOrgId },
+            body: JSON.stringify({ query: similarName, limit: 40 }),
+          });
+          const sdata = await searchRes.json();
+          if (sdata.results?.nodes?.length) {
+            setGraph(sdata.results);
+            setLastQuery(`Similar to ${node.displayName}`);
+            setSelectedNode(null);
+            setSimilarSourceId(node.id);
+            setError(`Found ${data.similar.length} similar profiles (${sharedCount} shared connections) · showing: ${similarName}`);
+            setTimeout(() => setError(null), 4000);
+          }
+        }
+      } else {
+        setError(`No similar ${node.label} nodes found`);
+        setTimeout(() => setError(null), 3000);
+      }
     } catch {
       // silent
     } finally {
@@ -175,7 +263,7 @@ export default function DashboardPage() {
 
 
   return (
-    <div className={`min-h-screen bg-gray-950 text-white ${debugMode ? "pr-[420px]" : ""}`}>
+    <div className={`min-h-screen bg-gray-950 text-white ${debugMode ? "pr-[460px]" : ""}`}>
       {/* Header */}
       <header className="border-b border-gray-800 px-6 py-3">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
@@ -254,11 +342,14 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {graph && graph.nodes.length > 0 && (
+        {filteredGraph && filteredGraph.nodes.length > 0 && (
           <>
             <div className="flex items-center justify-between">
               <span className="text-sm text-gray-500">
-                {graph.summary.total_nodes} nodes · {graph.summary.total_edges} edges
+                {filteredGraph.summary.total_nodes} nodes · {filteredGraph.summary.total_edges} edges
+                {Object.values(activeFilters).some(v=>v.length>0) && (
+                  <span className="ml-2 text-xs text-emerald-500">filtered</span>
+                )}
               </span>
               <button
                 onClick={() => handleAnalyze()}
@@ -271,20 +362,33 @@ export default function DashboardPage() {
             <div className="grid grid-cols-3 gap-4">
               <div className="col-span-2">
                 <ContextGraph
-                  nodes={graph.nodes}
-                  edges={graph.edges}
+                  nodes={filteredGraph.nodes}
+                  edges={filteredGraph.edges}
                   query={lastQuery}
-                  centerNodeId={graph.centerNodeId}
+                  centerNodeId={filteredGraph.centerNodeId}
+                  similarSourceId={similarSourceId}
                   onNodeClick={setSelectedNode}
                   onNodeDoubleClick={handleRecenter}
                 />
               </div>
-              <div>
-                <ContextTimeline
-                  nodes={graph.nodes}
-                  query={lastQuery}
-                  onEventClick={setSelectedNode}
-                />
+              {/* Right panel: NodeDetail when node selected, else Timeline */}
+              <div className="h-[600px] bg-gray-950 border border-gray-800 rounded-xl overflow-hidden flex flex-col">
+                {selectedNode ? (
+                  <NodeDetail
+                    node={selectedNode}
+                    onClose={() => setSelectedNode(null)}
+                    onAnalyze={handleAnalyze}
+                    onFindSimilar={handleFindSimilar}
+                  />
+                ) : (
+                  <div className="p-4 h-full flex flex-col overflow-hidden">
+                    <ContextTimeline
+                      nodes={filteredGraph.nodes}
+                      query={lastQuery}
+                      onEventClick={setSelectedNode}
+                    />
+                  </div>
+                )}
               </div>
             </div>
           </>
@@ -304,23 +408,15 @@ export default function DashboardPage() {
           insight={insight}
           loading={insightLoading}
           planLevel={plan === "enterprise" ? "full" : plan === "pro" ? "summary" : "none"}
-          onRegenerate={() => handleAnalyze()}
+          onRegenerate={() => { setInsight(null); setTimeout(() => handleAnalyze(), 50); }}
         />
       </main>
 
-      <NodeDetail
-        node={selectedNode}
-        onClose={() => setSelectedNode(null)}
-        onRecenter={handleRecenter}
-        onAnalyze={handleAnalyze}
-        onFindSimilar={handleFindSimilar}
-      />
-
-      {/* Trace panel — slides in from right when debug mode on */}
       {debugMode && (
-        <TracePanel
-          trace={trace}
-          onClose={() => { setDebugMode(false); setTrace(null); }}
+        <ActivityPanel
+          orgId={orgId}
+          resetKey={activityKey}
+          onClose={() => setDebugMode(false)}
         />
       )}
     </div>

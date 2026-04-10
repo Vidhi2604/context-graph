@@ -5,6 +5,7 @@ import { PLANS } from "@/lib/plans";
 import type { InsightResponse } from "@/types/graph";
 import { TraceCollector } from "@/lib/trace";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { logActivity, completeActivity } from "@/lib/activity-log";
 
 export async function POST(req: NextRequest) {
   try {
@@ -28,11 +29,17 @@ export async function POST(req: NextRequest) {
 
     const { query, nodes } = await req.json();
 
-    const graphContext = nodes
-      ?.map((n: Record<string, unknown>) =>
-        `${n.label}: ${n.displayName} (${JSON.stringify(n.properties).slice(0, 100)})`
-      )
-      .join("\n") || query || "No context provided";
+    // Cap to 20 most relevant nodes — LLM doesn't need all 72+ nodes, just a representative sample
+    const sampledNodes = (nodes || []).slice(0, 20);
+    const nodeStats = nodes?.length > 20
+      ? `\n[Showing 20 of ${nodes.length} total nodes]`
+      : "";
+
+    const graphContext = (sampledNodes.length
+      ? sampledNodes.map((n: Record<string, unknown>) =>
+          `${n.label}: ${n.displayName} (${JSON.stringify(n.properties).slice(0, 150)})`
+        ).join("\n") + nodeStats
+      : query || "No context provided") + `\n\nQuery: ${query}`;
 
     const prompt = `You are an analytics expert analyzing a context graph for a ${session.vertical} organization.
 
@@ -67,19 +74,21 @@ Rules:
           async () => ({ context: graphContext }))
       : Promise.resolve());
 
+    // Add timestamp to bust LLM cache — insights should always be fresh
+    const bustKey = `${Date.now()}`;
+    const insightActId = logActivity(session.tenantId, { layer: "insight", label: "LLM Insight Analysis", detail: `query: "${query}"`, status: "running", started_at: Date.now() });
     const raw = await (trace
       ? trace.run("LLM Reasoning Chain", "claudeExtract()", "llm",
-          `model: llama-3.3-70b, plan: ${session.plan}`,
-          () => claudeExtract(prompt, graphContext))
-      : claudeExtract(prompt, graphContext)) as Record<string, unknown>;
+          `model: claude-haiku, plan: ${session.plan}`,
+          () => claudeExtract(graphContext + `\n[${bustKey}]`, prompt))
+      : claudeExtract(graphContext + `\n[${bustKey}]`, prompt)) as Record<string, unknown>;
 
-    // Validate shape — LLM must return an object with a `result` field
     if (!raw || typeof raw !== "object" || !raw.result) {
-      return NextResponse.json(
-        { error: "Failed to generate insight — LLM returned unexpected format" },
-        { status: 502 }
-      );
+      completeActivity(session.tenantId, insightActId, "error", "LLM returned invalid response");
+      return NextResponse.json({ error: "LLM did not return a valid response. Try again." }, { status: 502 });
     }
+    completeActivity(session.tenantId, insightActId, "success", `confidence: ${(raw.result as Record<string,unknown>)?.confidence ?? "?"}`);
+
 
     const result = raw as unknown as InsightResponse;
 

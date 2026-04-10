@@ -5,18 +5,17 @@ import { GraphNode } from "@/types/graph";
 interface NodeDetailProps {
   node: GraphNode | null;
   onClose: () => void;
-  onRecenter: (node: GraphNode) => void;
   onAnalyze: (node: GraphNode) => void;
   onFindSimilar: (node: GraphNode) => void;
 }
 
-export default function NodeDetail({ node, onClose, onRecenter, onAnalyze, onFindSimilar }: NodeDetailProps) {
+export default function NodeDetail({ node, onClose, onAnalyze, onFindSimilar }: NodeDetailProps) {
   if (!node) return null;
 
   const isSuperseded = node.properties?.status === "superseded";
 
   return (
-    <div className="fixed right-0 top-0 h-full w-96 bg-gray-900 border-l border-gray-800 p-6 overflow-y-auto z-50 shadow-2xl">
+    <div className="h-full w-full bg-gray-950 p-5 overflow-y-auto flex flex-col">
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-2">
           <span className="w-3 h-3 rounded-full" style={{ backgroundColor: node.color }} />
@@ -66,14 +65,8 @@ export default function NodeDetail({ node, onClose, onRecenter, onAnalyze, onFin
       {/* Actions */}
       <div className="space-y-2">
         <button
-          onClick={() => onRecenter(node)}
-          className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-2 rounded-lg text-sm font-medium transition-colors"
-        >
-          Make Center Node
-        </button>
-        <button
           onClick={() => onAnalyze(node)}
-          className="w-full bg-gray-800 hover:bg-gray-700 text-white py-2 rounded-lg text-sm font-medium transition-colors"
+          className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-2 rounded-lg text-sm font-medium transition-colors"
         >
           🧠 Analyze
         </button>

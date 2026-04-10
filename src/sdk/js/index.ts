@@ -136,7 +136,8 @@ export class ContextMesh {
 
   // ── Internal ────────────────────────────────────────────────────
 
-  private async _post(path: string, body: unknown): Promise<never> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async _post(path: string, body: unknown): Promise<any> {
     if (this.debug) console.log(`[ContextMesh] POST ${path}`, body);
     const res = await fetch(`${this.baseUrl}${path}`, {
       method: "POST",
@@ -150,7 +151,8 @@ export class ContextMesh {
     return res.json();
   }
 
-  private async _get(path: string): Promise<never> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async _get(path: string): Promise<any> {
     if (this.debug) console.log(`[ContextMesh] GET ${path}`);
     const res = await fetch(`${this.baseUrl}${path}`, { headers: this.headers });
     if (!res.ok) {

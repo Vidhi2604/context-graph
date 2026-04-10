@@ -5,10 +5,10 @@ export const ZohoAdapter: ConnectorAdapter = {
 
   mapWebhook(payload: Record<string, unknown>): ContextMeshEvent[] {
     const events: ContextMeshEvent[] = [];
-    const module = (payload.module as string || "").toLowerCase();
+    const moduleName = (payload.module as string || "").toLowerCase();
     const data = (payload.data || payload) as Record<string, unknown>;
 
-    if (module === "contacts" || module === "leads") {
+    if (moduleName === "contacts" || moduleName === "leads") {
       const email = data.Email as string;
       const phone = data.Phone as string || data.Mobile as string;
       const name = [data.First_Name, data.Last_Name].filter(Boolean).join(" ");
@@ -30,7 +30,7 @@ export const ZohoAdapter: ConnectorAdapter = {
       }
     }
 
-    if (module === "deals" || module === "potentials") {
+    if (moduleName === "deals" || moduleName === "potentials") {
       events.push({
         event_type: data.Stage === "Closed Won" ? "deal_won" : "deal_stage_changed",
         identifiers: { crm_id: String(data.id || "") },

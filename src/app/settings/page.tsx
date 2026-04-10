@@ -128,7 +128,7 @@ export default function SettingsPage() {
               <div className="flex-1">
                 <label className="text-sm text-gray-400 block mb-1.5">Vertical</label>
                 <div className="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-sm text-gray-300">
-                  {vertical === "retail" ? "🏪" : "🏥"} {vertical.charAt(0).toUpperCase() + vertical.slice(1)}
+                  <span suppressHydrationWarning>{vertical === "retail" ? "🏪" : "🏥"}</span> {vertical.charAt(0).toUpperCase() + vertical.slice(1)}
                   <span className="text-gray-600 text-xs ml-1">(cannot change after creation)</span>
                 </div>
               </div>

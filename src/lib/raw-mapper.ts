@@ -10,10 +10,38 @@
 import { IngestConfig, DEFAULT_CONFIG } from "./ingest-configs";
 
 // Common field name aliases to try when config field is missing
-const IDENTIFIER_ALIASES = ["email", "user_id", "phone", "customer_id", "patient_id", "mrn", "uid", "userId", "user", "account_id"];
-const EVENT_TYPE_ALIASES = ["event_type", "event", "action", "type", "name", "event_name", "eventType"];
-const TIMESTAMP_ALIASES = ["timestamp", "created_at", "ts", "date", "time", "event_time", "occurred_at", "occurredAt", "datetime"];
-const AMOUNT_ALIASES = ["amount", "price", "total", "value", "order_value", "transaction_amount", "selling_price", "cost", "bill_amount"];
+const IDENTIFIER_ALIASES = [
+  // email
+  "email", "email_id", "mail",
+  // phone
+  "phone", "phone_no", "phone_number", "mobile", "mobile_no", "mob",
+  "contact", "contact_no", "contact_number", "whatsapp", "cell", "ph",
+  "patient_phone", "pt_phone", "buyer_phone", "client_phone", "consumer_phone",
+  // user IDs
+  "user_id", "uid", "userId", "user", "cust_id", "customer_id",
+  "patient_id", "pat_id", "pt_id", "account_id", "account",
+  "ref_id", "ref", "record_no", "reg_no", "hospital_id", "serial",
+  "token", "case_id", "entry_id", "record_id",
+  // mrn
+  "mrn", "medical_record_no",
+];
+const EVENT_TYPE_ALIASES = [
+  "event_type", "event", "action", "action_type", "type", "event_name", "eventType",
+  "visit_type", "case_type", "appointment_type", "service_type", "event_kind",
+  "transaction_type", "txn", "purchase_type", "order_action", "activity",
+  "admission", "consultation", "service", "reason",
+];
+const TIMESTAMP_ALIASES = [
+  "timestamp", "created_at", "ts", "date", "time", "event_time", "occurred_at",
+  "occurredAt", "datetime", "dt", "visit_date", "admit_date", "event_date",
+  "surgery_date", "logged", "appt_date", "readmit_ts", "discharge_date",
+  "purchase_ts", "sale_date", "order_date", "entry_time", "admitted",
+];
+const AMOUNT_ALIASES = [
+  "amount", "price", "total", "value", "order_value", "transaction_amount",
+  "selling_price", "cost", "bill_amount", "sale_price", "purchase_amt",
+  "return_amount", "amt", "fee",
+];
 const CHANNEL_ALIASES = ["channel", "platform", "source", "medium", "device"];
 
 function tryFields(payload: Record<string, unknown>, fields: string[]): unknown {
@@ -33,16 +61,17 @@ function extractIdentifiers(payload: Record<string, unknown>, config: IngestConf
     const val = payload[field];
     if (val && typeof val === "string" && val.length > 0) {
       // Map to known identifier types
+      const isPhone = ["phone","mobile","mob","contact","whatsapp","cell","ph"].some(k => field.includes(k))
+        || /^[\d\s\-\+\(\)]{8,15}$/.test(val.replace(/[^\d]/g, "").length >= 8 ? val : "");
       if (field.includes("email") || val.includes("@")) {
         identifiers.email = val;
-      } else if (field.includes("phone") || field.includes("mobile")) {
+      } else if (isPhone) {
         identifiers.phone = val;
-      } else if (field.includes("mrn") || field.includes("patient_id")) {
+      } else if (field.includes("mrn") || field.includes("patient_id") || field.includes("pat_id")) {
         identifiers.mrn = val;
       } else if (field.includes("aadhaar")) {
         identifiers.aadhaar = val;
       } else {
-        // Generic — use as crm_id or user_id
         identifiers[field.includes("user") ? "user_id" : "crm_id"] = val;
       }
     }
@@ -64,14 +93,24 @@ function extractEventType(payload: Record<string, unknown>, config: IngestConfig
 
   // Normalize common event names
   const normalizations: Record<string, string> = {
+    // Retail
     "purchase": "purchase", "buy": "purchase", "order": "purchase", "sold": "purchase",
-    "return": "return_initiated", "refund": "refund_issued",
+    "sale": "purchase", "cod": "purchase",
+    "return": "return_initiated", "refund": "refund_issued", "return_request": "return_initiated",
     "view": "product_view", "click": "product_view",
-    "cart": "add_to_cart", "add": "add_to_cart",
-    "support": "support_ticket", "ticket": "support_ticket",
+    "cart": "add_to_cart", "add_to_basket": "add_to_cart", "basket": "add_to_cart",
+    "support": "support_ticket", "ticket": "support_ticket", "complaint": "support_ticket",
+    "support_call": "support_ticket",
     "delivery": "delivery_completed", "delivered": "delivery_completed",
-    "visit": "visit", "admission": "visit", "discharge": "visit",
+    "cancel": "order_cancelled", "cancelled": "order_cancelled",
     "login": "page_view", "session": "page_view",
+    // Healthcare
+    "emergency": "visit", "admission": "visit", "admitted": "visit",
+    "inpatient": "visit", "outpatient": "visit", "follow_up": "visit",
+    "follow-up": "visit", "followup": "visit", "consultation": "visit",
+    "surgery": "visit", "procedure": "visit", "discharge": "visit",
+    "readmission": "visit", "readmit": "visit",
+    "diagnosis": "visit", "checkup": "visit", "appointment": "visit",
   };
 
   for (const [key, val] of Object.entries(normalizations)) {
@@ -150,7 +189,11 @@ export function mapRawPayload(
   let provider: Record<string, unknown> | undefined;
   if (config.provider_fields) {
     const pf = config.provider_fields;
-    const pName = pf.name ? payload[pf.name] : tryFields(payload, ["doctor_name", "doctor", "provider_name", "physician"]);
+    const pName = pf.name ? payload[pf.name] : tryFields(payload, [
+      "doctor_name", "doctor", "provider_name", "physician", "doc",
+      "doctor_assigned", "specialist", "surgeon", "assigned_to",
+      "attending", "treating_dr", "treating_physician", "physician_name",
+    ]);
     if (pName) {
       provider = {
         name: pName,
@@ -177,9 +220,14 @@ export function mapRawPayload(
 
   // Profile data (name, city, tier etc.)
   const profile_data: Record<string, unknown> = {};
-  const nameVal = tryFields(payload, ["name", "full_name", "customer_name", "patient_name", "user_name"]);
+  const nameVal = tryFields(payload, [
+    "name", "full_name", "customer_name", "patient_name", "user_name",
+    "patient_nm", "nm", "pt_name", "person_name", "account_holder",
+    "buyer", "client_name", "consumer_name", "subject", "username",
+    "user_full_name",
+  ]);
   if (nameVal) profile_data.name = nameVal;
-  const cityVal = tryFields(payload, ["city", "location", "region", "state"]);
+  const cityVal = tryFields(payload, ["city", "location", "region", "state", "area", "loc", "buyer_city", "client_city", "pincode"]);
   if (cityVal) profile_data.city = cityVal;
   const tierVal = tryFields(payload, ["tier", "membership", "plan", "segment", "loyalty_tier"]);
   if (tierVal) profile_data.tier = tierVal;
@@ -187,6 +235,18 @@ export function mapRawPayload(
   if (ageVal) profile_data.age = ageVal;
   const genderVal = tryFields(payload, ["gender", "sex"]);
   if (genderVal) profile_data.gender = genderVal;
+
+  // Auto-extract visit context for healthcare-like payloads
+  const visitDept = tryFields(payload, ["dept", "department", "ward", "ward_no", "discharge_ward", "dept_code"]);
+  const visitPriority = tryFields(payload, ["priority", "priority_level", "urgency", "severity"]);
+  const visitType = tryFields(payload, ["visit_type", "case_type", "admission", "appointment_type", "service_type", "event_kind", "consultation"]);
+  if (visitDept || visitPriority || visitType) {
+    (provider as Record<string, unknown> | undefined) = provider || {};
+    // Store visit metadata in properties for process route to use
+    (payload as Record<string, unknown>)._visit_dept = visitDept;
+    (payload as Record<string, unknown>)._visit_priority = visitPriority;
+    (payload as Record<string, unknown>)._visit_type = visitType;
+  }
 
   // Source ID for idempotency
   const source_id = String(

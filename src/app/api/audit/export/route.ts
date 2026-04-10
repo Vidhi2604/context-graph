@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
 
     const { searchParams } = new URL(req.url);
     const format = searchParams.get("format") || "json"; // json | csv
-    const action = searchParams.get("action") as Parameters<typeof getAuditLog>[1]["action"] | undefined;
+    const action = (searchParams.get("action") || undefined) as import("@/lib/audit-log").AuditAction | undefined;
     const from = searchParams.get("from") || undefined;
     const to = searchParams.get("to") || undefined;
     const resource_type = searchParams.get("resource_type") || undefined;

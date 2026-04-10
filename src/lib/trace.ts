@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from "uuid";
 
 // ── Types ──────────────────────────────────────────────────────────
 
-export type TraceLayer = "auth" | "validation" | "llm" | "neo4j" | "mapping" | "scoring" | "kafka";
+export type TraceLayer = "auth" | "validation" | "llm" | "neo4j" | "mapping" | "scoring" | "kafka" | "streams";
 export type TraceStatus = "success" | "skipped" | "error";
 export type TraceAction = "search" | "event_ingest" | "transcript" | "insight" | "agent_context" | "connector_sync" | "explore";
 
@@ -153,6 +153,7 @@ export const LAYER_COLORS: Record<TraceLayer, string> = {
   mapping:    "#f97316",  // orange
   scoring:    "#14b8a6",  // teal
   kafka:      "#eab308",  // yellow
+  streams:    "#f59e0b",  // amber
 };
 
 export const LAYER_LABELS: Record<TraceLayer, string> = {
@@ -163,4 +164,5 @@ export const LAYER_LABELS: Record<TraceLayer, string> = {
   mapping:    "Mapping",
   scoring:    "Scoring",
   kafka:      "Kafka",
+  streams:    "Redis",
 };

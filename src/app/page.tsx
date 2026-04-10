@@ -9,12 +9,12 @@ export default function Home() {
         <Logo size={32} showText />
         <div className="flex items-center gap-6 text-sm text-gray-400">
           <Link href="/api-docs" className="hover:text-white transition-colors">API Docs</Link>
-          <Link href="/settings" className="hover:text-white transition-colors">Settings</Link>
+          <Link href="/auth/signin" className="hover:text-white transition-colors">Sign In</Link>
           <Link
-            href="/dashboard"
+            href="/auth/signup"
             className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-1.5 rounded-lg font-medium transition-colors"
           >
-            Open Dashboard
+            Get Started
           </Link>
         </div>
       </nav>
@@ -40,16 +40,16 @@ export default function Home() {
 
           <div className="flex items-center justify-center gap-4">
             <Link
-              href="/dashboard"
+              href="/auth/signup"
               className="bg-emerald-600 hover:bg-emerald-500 px-6 py-3 rounded-lg font-medium transition-colors"
             >
-              Open Dashboard
+              Get Started Free
             </Link>
             <Link
-              href="/api-docs"
+              href="/auth/signin"
               className="border border-gray-700 hover:border-gray-500 px-6 py-3 rounded-lg font-medium transition-colors text-gray-300"
             >
-              API Docs
+              Sign In
             </Link>
           </div>
         </div>

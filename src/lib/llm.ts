@@ -1,92 +1,121 @@
 /**
- * lib/llm.ts — Unified LLM interface
+ * lib/llm.ts — Anthropic Claude only
  *
- * Two functions matching main branch's API contract:
- *   - claudeExtract: fast, JSON, high-volume (Cypher gen, extraction, classification)
- *   - claudeReason:  complex reasoning, returns text (insights, summaries, actions)
+ * claudeExtract → Claude Haiku (fast, structured JSON)
+ * claudeReason  → Claude Sonnet (deep reasoning)
  *
- * Backed by Groq (free tier, sub-500ms) for hackathon.
- * Production upgrade path: swap getClient() to Anthropic SDK, same call signature.
+ * No Groq. No rate limit issues.
  */
 
-import Groq from "groq-sdk";
+import Anthropic from "@anthropic-ai/sdk";
 
-let _client: Groq | null = null;
+let _client: Anthropic | null = null;
 
-function getClient(): Groq {
+function getClient(): Anthropic {
   if (!_client) {
-    _client = new Groq({ apiKey: process.env.GROQ_API_KEY });
+    _client = new Anthropic({
+      apiKey: process.env.ANTHROPIC_KEY || process.env.ANTHROPIC_API_KEY,
+    });
   }
   return _client;
 }
 
-// Fast model — extraction, classification, Cypher generation
-const EXTRACT_MODEL = "llama-3.3-70b-versatile";
+const EXTRACT_MODEL = "claude-haiku-4-5-20251001";
+const REASON_MODEL  = "claude-sonnet-4-6";
 
-// Reasoning model — insights, summaries, agent actions
-// Same model on Groq free tier; swap to claude-sonnet-4-6 in production
-const REASON_MODEL = "llama-3.3-70b-versatile";
+// ── LRU Cache ────────────────────────────────────────────────────────
 
-/**
- * claudeExtract — fast structured extraction.
- * Returns parsed JSON. Handles markdown code-fence wrapping.
- */
+interface CacheEntry { value: unknown; expiresAt: number }
+const cache = new Map<string, CacheEntry>();
+const CACHE_TTL_MS = 60 * 60 * 1000;
+const CACHE_MAX    = 500;
+
+function cacheKey(system: string, user: string): string {
+  return `${system.slice(0, 120)}|||${user.slice(0, 120)}`;
+}
+function cacheGet(key: string): unknown | null {
+  const entry = cache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) { cache.delete(key); return null; }
+  return entry.value;
+}
+function cacheSet(key: string, value: unknown): void {
+  if (cache.size >= CACHE_MAX) {
+    const first = cache.keys().next().value;
+    if (first) cache.delete(first);
+  }
+  cache.set(key, { value, expiresAt: Date.now() + CACHE_TTL_MS });
+}
+
+export function getCacheStats() {
+  return { size: cache.size, max: CACHE_MAX };
+}
+
+function parseJSON(text: string): unknown {
+  try { return JSON.parse(text); } catch {}
+  // Strip markdown fences
+  const clean = text.replace(/^```(?:json)?\s*/m, "").replace(/\s*```\s*$/m, "").trim();
+  try { return JSON.parse(clean); } catch {}
+  // Extract first JSON object
+  const match = text.match(/\{[\s\S]+\}/);
+  if (match) { try { return JSON.parse(match[0]); } catch {} }
+  return {};
+}
+
+// ── claudeExtract ────────────────────────────────────────────────────
+
 export async function claudeExtract(
   userPrompt: string,
   systemPrompt: string
 ): Promise<unknown> {
-  const response = await getClient().chat.completions.create({
-    model: EXTRACT_MODEL,
-    max_tokens: 1024,
-    temperature: 0.1,
-    response_format: { type: "json_object" },
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-    ],
-  });
-
-  const text = response.choices[0]?.message?.content;
-
-  if (!text) {
-    console.error("[llm] claudeExtract: empty response from model");
-    return {};
-  }
+  const key = cacheKey(systemPrompt, userPrompt);
+  const hit = cacheGet(key);
+  if (hit !== null) return hit;
 
   try {
-    return JSON.parse(text);
-  } catch {
-    const match = text.match(/```(?:json)?\s*([\s\S]+?)```/);
-    if (match) {
-      try { return JSON.parse(match[1]); } catch {}
+    const res = await getClient().messages.create({
+      model: EXTRACT_MODEL,
+      max_tokens: 1024,
+      system: systemPrompt + "\n\nRespond with valid JSON only. No markdown, no explanation.",
+      messages: [{ role: "user", content: userPrompt }],
+    });
+
+    const text = res.content[0]?.type === "text" ? res.content[0].text : "";
+    const parsed = parseJSON(text);
+
+    if (parsed && typeof parsed === "object" && Object.keys(parsed as object).length > 0) {
+      cacheSet(key, parsed);
     }
-    console.error("[llm] claudeExtract: failed to parse JSON from model response");
+    return parsed;
+  } catch (err) {
+    console.error("[llm] claudeExtract:", err instanceof Error ? err.message : err);
     return {};
   }
 }
 
-/**
- * claudeReason — complex reasoning, returns raw text.
- * Used for: insights narration, pattern summaries, risk explanations, agent actions.
- */
+// ── claudeReason ─────────────────────────────────────────────────────
+
 export async function claudeReason(
   userPrompt: string,
   systemPrompt: string
 ): Promise<string> {
-  const response = await getClient().chat.completions.create({
-    model: REASON_MODEL,
-    max_tokens: 2048,
-    temperature: 0.2,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-    ],
-  });
+  const key = cacheKey(systemPrompt, userPrompt);
+  const hit = cacheGet(key);
+  if (hit !== null) return String(hit);
 
-  const text = response.choices[0]?.message?.content;
-  if (!text) {
-    console.error("[llm] claudeReason: empty response from model");
+  try {
+    const res = await getClient().messages.create({
+      model: REASON_MODEL,
+      max_tokens: 2048,
+      system: systemPrompt,
+      messages: [{ role: "user", content: userPrompt }],
+    });
+
+    const text = res.content[0]?.type === "text" ? res.content[0].text : "";
+    if (text) cacheSet(key, text);
+    return text;
+  } catch (err) {
+    console.error("[llm] claudeReason:", err instanceof Error ? err.message : err);
     return "";
   }
-  return text;
 }

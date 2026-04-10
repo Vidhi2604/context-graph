@@ -71,7 +71,7 @@ export default function OrgSwitcher({ currentOrgId, currentVertical }: OrgSwitch
         onClick={() => setOpen(!open)}
         className="flex items-center gap-2 bg-gray-900 border border-gray-700 hover:border-gray-600 rounded-lg px-3 py-1.5 text-sm transition-colors"
       >
-        <span>{icon}</span>
+        <span suppressHydrationWarning>{icon}</span>
         <span className="text-gray-300 max-w-[120px] truncate">
           {currentOrg?.name || "My Org"}
         </span>
@@ -88,7 +88,7 @@ export default function OrgSwitcher({ currentOrgId, currentVertical }: OrgSwitch
                 org.id === currentOrgId ? "bg-gray-800/50" : ""
               }`}
             >
-              <span>{org.vertical === "retail" ? "🏪" : "🏥"}</span>
+              <span suppressHydrationWarning>{org.vertical === "retail" ? "🏪" : "🏥"}</span>
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium truncate">{org.name}</div>
                 <div className="text-xs text-gray-500 capitalize">{org.vertical} · {org.plan}</div>

@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getOrgFromApiKey, errorResponse } from "@/lib/api-auth";
 import { getAdapter } from "@/lib/connectors/registry";
-import { produceEvent } from "@/lib/kafka";
+import { produceToStream } from "@/lib/streams";
 import { ConnectorType } from "@/types/connector";
+import { logActivity, completeActivity } from "@/lib/activity-log";
 
 export async function POST(
   req: NextRequest,
@@ -24,21 +25,43 @@ export async function POST(
       return NextResponse.json({ accepted: true, events_mapped: 0, message: "No mappable events in payload" });
     }
 
-    // Produce all events to Kafka
     let ingested = 0;
     let failed = 0;
+    const groupId = `ingest_${Date.now()}`;
+
+    const ingestId = logActivity(session.tenantId, {
+      layer: "ingest",
+      label: `Webhook received · ${source}`,
+      detail: `${events.length} events mapped`,
+      status: "running",
+      started_at: Date.now(),
+      group_id: groupId,
+    });
 
     for (const event of events) {
+      const redisId = logActivity(session.tenantId, {
+        layer: "redis",
+        label: "Redis XADD",
+        detail: `stream:${session.tenantId} · ${String(event.event_type || "event")}`,
+        status: "running",
+        started_at: Date.now(),
+        group_id: groupId,
+      });
       try {
-        await produceEvent(session.tenantId, {
+        const streamId = await produceToStream(session.tenantId, {
           ...event,
           _vertical: session.vertical,
         });
+        completeActivity(session.tenantId, redisId, "success", `msg_id: ${streamId}`);
         ingested++;
-      } catch {
+      } catch (e) {
+        completeActivity(session.tenantId, redisId, "error", e instanceof Error ? e.message : "stream error");
         failed++;
       }
     }
+
+    completeActivity(session.tenantId, ingestId, failed === events.length ? "error" : "success",
+      `${ingested} pushed to stream, ${failed} failed`);
 
     return NextResponse.json({
       accepted: true,
