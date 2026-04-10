@@ -412,3 +412,4 @@ Key endpoints:
 ## License
 
 MIT — Built for Nurix Hackathon 2025 by Latency Labs.
+# Deployment ready
