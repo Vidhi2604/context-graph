@@ -5,13 +5,14 @@ import Link from "next/link";
 import { useSession, signOut } from "next-auth/react";
 import SearchBar from "@/components/SearchBar";
 import ContextGraph from "@/components/ContextGraph";
-import EventTimeline from "@/components/EventTimeline";
+import ContextTimeline from "@/components/ContextTimeline";
 import NodeDetail from "@/components/NodeDetail";
 import InsightPanel from "@/components/InsightPanel";
 import ValueBar from "@/components/ValueBar";
 import TracePanel from "@/components/TracePanel";
 import FilterBar from "@/components/FilterBar";
 import OrgSwitcher from "@/components/OrgSwitcher";
+import Logo from "@/components/Logo";
 import { GraphNode, GraphResult, InsightResponse } from "@/types/graph";
 import { PipelineTrace } from "@/lib/trace";
 import { getVertical } from "@/verticals/registry";
@@ -32,10 +33,15 @@ export default function DashboardPage() {
 
   const { data: session } = useSession();
 
-  // Prefer session data, fall back to localStorage (for demo without auth)
-  const orgId = session?.orgId || (typeof window !== "undefined" ? localStorage.getItem("orgId") || "" : "");
-  const vertical = session?.vertical || (typeof window !== "undefined" ? localStorage.getItem("vertical") || "retail" : "retail");
-  const plan = session?.plan || (typeof window !== "undefined" ? localStorage.getItem("plan") || "enterprise" : "enterprise");
+  // localStorage always takes priority (user may have switched org manually)
+  // Session is only used if localStorage is empty
+  const lsOrgId = typeof window !== "undefined" ? localStorage.getItem("orgId") || "" : "";
+  const lsVertical = typeof window !== "undefined" ? localStorage.getItem("vertical") || "" : "";
+  const lsPlan = typeof window !== "undefined" ? localStorage.getItem("plan") || "" : "";
+
+  const orgId = lsOrgId || session?.orgId || "";
+  const vertical = lsVertical || session?.vertical || "retail";
+  const plan = lsPlan || session?.plan || "enterprise";
 
   // Safe vertical config — fallback to retail if unknown vertical value
   const verticalConfig = (() => {
@@ -48,6 +54,16 @@ export default function DashboardPage() {
   }, []);
 
   const handleFilterClear = useCallback(() => setActiveFilters({}), []);
+
+  // Sync session → localStorage on first load (when localStorage is empty)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!localStorage.getItem("orgId") && session?.orgId) {
+      localStorage.setItem("orgId", session.orgId);
+      localStorage.setItem("vertical", session.vertical || "retail");
+      localStorage.setItem("plan", session.plan || "enterprise");
+    }
+  }, [session]);
 
   useEffect(() => {
     if (!orgId) return;
@@ -164,9 +180,9 @@ export default function DashboardPage() {
       <header className="border-b border-gray-800 px-6 py-3">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <h1 className="text-xl font-bold">
-              <span className="text-emerald-400">Context</span>Mesh
-            </h1>
+            <Link href="/">
+              <Logo size={28} showText />
+            </Link>
             <OrgSwitcher currentOrgId={orgId} currentVertical={vertical} />
             <span className="text-xs bg-emerald-900/30 text-emerald-400 px-2 py-0.5 rounded capitalize">
               {plan}
@@ -264,8 +280,9 @@ export default function DashboardPage() {
                 />
               </div>
               <div>
-                <EventTimeline
-                  timeline={graph.timeline}
+                <ContextTimeline
+                  nodes={graph.nodes}
+                  query={lastQuery}
                   onEventClick={setSelectedNode}
                 />
               </div>

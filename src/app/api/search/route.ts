@@ -169,8 +169,6 @@ async function applyFilters(
   filters: Record<string, string[]>,
   tenantId: string
 ): Promise<string[]> {
-  // Build WHERE conditions from filters
-  const conditions: string[] = ["p.profile_id IN $profileIds", "p._tenant = $tenantId"];
   const params: Record<string, unknown> = { profileIds, tenantId };
 
   const FILTER_FIELD_MAP: Record<string, string> = {
@@ -189,10 +187,23 @@ async function applyFilters(
   const profileOnlyFilters = ["tier", "city"];
   const needsEventJoin = Object.keys(filters).some(k => !profileOnlyFilters.includes(k) && filters[k].length > 0);
 
-  let cypher = `MATCH (p:Profile {_tenant: $tenantId}) WHERE p.profile_id IN $profileIds`;
+  // Build filter conditions (excluding the base ones already in MATCH)
+  const filterConditions: string[] = [];
+  for (const [filterId, values] of Object.entries(filters)) {
+    if (!values || values.length === 0) continue;
+    const field = FILTER_FIELD_MAP[filterId];
+    if (!field) continue;
+    const paramKey = `filter_${filterId}`;
+    filterConditions.push(`(${field} IN $${paramKey})`);
+    params[paramKey] = values;
+  }
+
+  let cypher = `MATCH (p:Profile {_tenant: $tenantId})
+    WHERE p.profile_id IN $profileIds`;
 
   if (needsEventJoin) {
     cypher += `
+    WITH p
     OPTIONAL MATCH (p)-[:PERFORMED|HAD_VISIT]->(e)
     OPTIONAL MATCH (e)-[:INVOLVES]->(prod:Product)
     OPTIONAL MATCH (e)-[:PAID_VIA]->(pay:Payment)
@@ -201,17 +212,12 @@ async function applyFilters(
     WITH p, e, prod, pay, ic, d`;
   }
 
-  for (const [filterId, values] of Object.entries(filters)) {
-    if (!values || values.length === 0) continue;
-    const field = FILTER_FIELD_MAP[filterId];
-    if (!field) continue;
-    const paramKey = `filter_${filterId}`;
-    conditions.push(`(${field} IN $${paramKey})`);
-    params[paramKey] = values;
+  if (filterConditions.length > 0) {
+    cypher += `
+    WHERE ${filterConditions.join(" AND ")}`;
   }
 
   cypher += `
-    WHERE ${conditions.join(" AND ")}
     RETURN DISTINCT p.profile_id AS profile_id
     LIMIT 20`;
 
@@ -248,21 +254,35 @@ function expandProfileContext(profileIds: string[], tenantId: string, vertical: 
   const relType = isRetail ? "PERFORMED" : "HAD_VISIT";
   const eventLabel = isRetail ? "Event" : "Visit";
 
+  // Return as paths so graph-mapper can extract nodes + edges with correct IDs
   return runQuery(
     `
     UNWIND $profileIds AS pid
     MATCH (p:Profile {profile_id: pid, _tenant: $tenantId})
-    OPTIONAL MATCH (p)-[r1:${relType}]->(e:${eventLabel} {_tenant: $tenantId})
-    OPTIONAL MATCH (e)-[r2:INVOLVES]->(prod:Product {_tenant: $tenantId})
-    OPTIONAL MATCH (e)-[r3:PAID_VIA]->(pay:Payment {_tenant: $tenantId})
-    OPTIONAL MATCH (e)-[r4:GOVERNED_BY|OVERRODE]->(pol:Policy {_tenant: $tenantId})
-    OPTIONAL MATCH (e)-[r5:HANDLED_BY]->(a:Agent {_tenant: $tenantId})
-    OPTIONAL MATCH (e)-[r6:DIAGNOSED_WITH]->(d:Diagnosis {_tenant: $tenantId})
-    OPTIONAL MATCH (e)-[r7:ATTENDED_BY]->(pr:Provider {_tenant: $tenantId})
-    OPTIONAL MATCH (p)-[r8:HAS_COMMITMENT]->(c:Commitment {_tenant: $tenantId})
-    RETURN p, r1, e, r2, prod, r3, pay, r4, pol, r5, a, r6, d, r7, pr, r8, c
-    ORDER BY e.timestamp DESC
-    LIMIT 100
+
+    // Profile → Event/Visit paths
+    OPTIONAL MATCH path1 = (p)-[:${relType}]->(e:${eventLabel} {_tenant: $tenantId})
+
+    // Event → Product paths
+    OPTIONAL MATCH path2 = (e)-[:INVOLVES]->(prod:Product {_tenant: $tenantId})
+
+    // Event → Payment paths
+    OPTIONAL MATCH path3 = (e)-[:PAID_VIA]->(pay:Payment {_tenant: $tenantId})
+
+    // Event → Policy paths (GOVERNED_BY or OVERRODE)
+    OPTIONAL MATCH path4 = (e)-[:GOVERNED_BY|OVERRODE]->(pol:Policy {_tenant: $tenantId})
+
+    // Event → Agent/Provider paths
+    OPTIONAL MATCH path5 = (e)-[:HANDLED_BY|ATTENDED_BY]->(handler {_tenant: $tenantId})
+
+    // Profile → Commitment paths
+    OPTIONAL MATCH path6 = (p)-[:HAS_COMMITMENT]->(c:Commitment {_tenant: $tenantId})
+
+    // Healthcare: Event → Diagnosis paths
+    OPTIONAL MATCH path7 = (e)-[:DIAGNOSED_WITH]->(d:Diagnosis {_tenant: $tenantId})
+
+    RETURN p, path1, path2, path3, path4, path5, path6, path7
+    LIMIT 150
     `,
     { profileIds, tenantId }
   );

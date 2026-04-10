@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getOrgFromRequest, errorResponse } from "@/lib/api-auth";
 import { getAdapter, getConnector, getConnectors } from "@/lib/connectors/registry";
-import { produceEvent } from "@/lib/kafka";
+import { isStreamsConfigured, produceToStream } from "@/lib/streams";
 import { ConnectorTypeSchema } from "@/types/connector";
 
 export async function POST(req: NextRequest) {
@@ -44,16 +44,29 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Produce all events to Kafka
+    // Produce to Redis Streams (if configured) or process directly
     let eventsIngested = 0;
     let eventsFailed = 0;
+    const baseUrl = `${req.nextUrl.protocol}//${req.nextUrl.host}`;
 
     for (const event of events) {
       try {
-        await produceEvent(session.tenantId, {
-          ...event,
-          _vertical: session.vertical,
-        });
+        const payload = { ...event, _vertical: session.vertical };
+
+        if (isStreamsConfigured()) {
+          await produceToStream(session.tenantId, payload);
+        } else {
+          // Direct sync — no queue needed
+          const res = await fetch(`${baseUrl}/api/events`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": req.headers.get("Authorization") || "",
+            },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) throw new Error(`${res.status}`);
+        }
         eventsIngested++;
       } catch {
         eventsFailed++;

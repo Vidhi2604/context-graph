@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { RetailEventSchema, HealthcareEventSchema } from "@/types/event";
 import { getOrgFromRequest, errorResponse } from "@/lib/api-auth";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { isStreamsConfigured, produceToStream } from "@/lib/streams";
 
 export async function POST(req: NextRequest) {
   try {
@@ -23,31 +24,32 @@ export async function POST(req: NextRequest) {
 
     const eventPayload = { ...parsed.data, _vertical: session.vertical };
 
-    // ?sync=true — bypass Kafka and process directly (useful when Kafka isn't configured)
-    const syncMode = req.nextUrl.searchParams.get("sync") === "true"
-      || !process.env.UPSTASH_KAFKA_REST_URL;
+    const syncMode = req.nextUrl.searchParams.get("sync") === "true";
 
-    if (syncMode) {
-      // Direct processing — call the consumer endpoint internally
-      const baseUrl = `${req.nextUrl.protocol}//${req.nextUrl.host}`;
-      await fetch(`${baseUrl}/api/events/process`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-org-id": session.orgId,
-          "x-cron-secret": process.env.CRON_SECRET || "dev",
-        },
-        body: JSON.stringify({ events: [eventPayload], tenantId: session.tenantId }),
-      }).catch(() => {}); // fire and forget
-
-      return NextResponse.json({ accepted: true, mode: "sync" }, { status: 202 });
+    // 1. Try Redis Streams (primary async pipeline)
+    if (!syncMode && isStreamsConfigured()) {
+      const messageId = await produceToStream(session.tenantId, eventPayload);
+      return NextResponse.json({
+        accepted: true,
+        mode: "stream",
+        message_id: messageId,
+        stream: `stream:${session.tenantId}`,
+      }, { status: 202 });
     }
 
-    // Async via Kafka
-    const { produceEvent } = await import("@/lib/kafka");
-    await produceEvent(session.tenantId, eventPayload);
+    // 2. Sync fallback — process directly
+    const baseUrl = `${req.nextUrl.protocol}//${req.nextUrl.host}`;
+    await fetch(`${baseUrl}/api/events/process`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-org-id": session.orgId,
+        "x-cron-secret": process.env.CRON_SECRET || "dev",
+      },
+      body: JSON.stringify({ events: [eventPayload], tenantId: session.tenantId }),
+    }).catch(() => {});
 
-    return NextResponse.json({ accepted: true, message: "Event queued for processing" }, { status: 202 });
+    return NextResponse.json({ accepted: true, mode: "sync" }, { status: 202 });
   } catch (error) {
     return errorResponse(error);
   }

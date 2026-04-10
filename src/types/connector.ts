@@ -2,7 +2,7 @@ import { z } from "zod";
 
 // ── Connector Config ───────────────────────────────────────────────
 
-export const ConnectorTypeSchema = z.enum(["hubspot", "zendesk", "nurix"]);
+export const ConnectorTypeSchema = z.enum(["hubspot", "zendesk", "nurix", "salesforce", "zoho"]);
 export type ConnectorType = z.infer<typeof ConnectorTypeSchema>;
 
 export interface ConnectorConfig {

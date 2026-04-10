@@ -49,20 +49,30 @@ export const authOptions: NextAuthOptions = {
       if (token.userId) {
         session.user.id = token.userId as string;
 
-        // Attach active org to session
-        const membership = await prisma.orgMember.findFirst({
+        // Attach active org — prefer enterprise > pro > starter, prefer seeded
+        const memberships = await prisma.orgMember.findMany({
           where: { userId: token.userId as string },
           include: { org: true },
-          orderBy: { org: { createdAt: "desc" } },
         });
 
-        if (membership) {
-          session.orgId = membership.org.id;
-          session.tenantId = membership.org.tenantId;
-          session.vertical = membership.org.vertical;
-          session.plan = membership.org.plan;
-          session.seeded = membership.org.seeded;
-          session.apiKey = membership.org.apiKey;
+        const PLAN_RANK: Record<string, number> = { enterprise: 3, pro: 2, starter: 1 };
+
+        const best = memberships.sort((a, b) => {
+          // Prefer seeded orgs
+          if (a.org.seeded !== b.org.seeded) return a.org.seeded ? -1 : 1;
+          // Then prefer higher plan
+          const pa = PLAN_RANK[a.org.plan] || 0;
+          const pb = PLAN_RANK[b.org.plan] || 0;
+          return pb - pa;
+        })[0];
+
+        if (best) {
+          session.orgId = best.org.id;
+          session.tenantId = best.org.tenantId;
+          session.vertical = best.org.vertical;
+          session.plan = best.org.plan;
+          session.seeded = best.org.seeded;
+          session.apiKey = best.org.apiKey;
         }
       }
       return session;

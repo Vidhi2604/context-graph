@@ -11,36 +11,79 @@ export function mapNeo4jToGraph(
   const nodesMap = new Map<string, GraphNode>();
   const edgesMap = new Map<string, GraphEdge>();
 
+  // Map from Neo4j internal ID → business ID (for edge source/target resolution)
+  const internalIdMap = new Map<string, string>();
+
   for (const record of records) {
     for (const [, value] of Object.entries(record)) {
       if (isNeo4jNode(value)) {
         const node = mapNode(value, vertical);
-        if (node && !nodesMap.has(node.id)) {
-          nodesMap.set(node.id, node);
+        if (node) {
+          if (!nodesMap.has(node.id)) nodesMap.set(node.id, node);
+          // Store internal ID → business ID mapping
+          const internal = getInternalId(value as Neo4jNode);
+          if (internal) internalIdMap.set(internal, node.id);
         }
       }
-      if (isNeo4jRelationship(value)) {
-        const edge = mapEdge(value);
-        if (edge && !edgesMap.has(edge.id)) {
-          edgesMap.set(edge.id, edge);
-        }
-      }
-      // Handle path objects
+      // Handle path objects — most reliable for edges
       if (isNeo4jPath(value)) {
         for (const seg of (value as Neo4jPath).segments) {
           const startNode = mapNode(seg.start, vertical);
           const endNode = mapNode(seg.end, vertical);
-          const edge = mapEdge(seg.relationship);
-          if (startNode && !nodesMap.has(startNode.id)) nodesMap.set(startNode.id, startNode);
-          if (endNode && !nodesMap.has(endNode.id)) nodesMap.set(endNode.id, endNode);
-          if (edge && !edgesMap.has(edge.id)) edgesMap.set(edge.id, edge);
+          if (startNode && !nodesMap.has(startNode.id)) {
+            nodesMap.set(startNode.id, startNode);
+            const internal = getInternalId(seg.start);
+            if (internal) internalIdMap.set(internal, startNode.id);
+          }
+          if (endNode && !nodesMap.has(endNode.id)) {
+            nodesMap.set(endNode.id, endNode);
+            const internal = getInternalId(seg.end);
+            if (internal) internalIdMap.set(internal, endNode.id);
+          }
+          // Build edge using business IDs from the path nodes
+          if (startNode && endNode) {
+            const edgeId = `${startNode.id}-${seg.relationship.type}-${endNode.id}`;
+            if (!edgesMap.has(edgeId)) {
+              edgesMap.set(edgeId, {
+                id: edgeId,
+                source: startNode.id,
+                target: endNode.id,
+                type: seg.relationship.type,
+                properties: seg.relationship.properties || {},
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Second pass: resolve standalone relationships using internalIdMap
+  for (const record of records) {
+    for (const [, value] of Object.entries(record)) {
+      if (isNeo4jRelationship(value)) {
+        const rel = value as Neo4jRelationship;
+        const sourceId = internalIdMap.get(String(rel.start));
+        const targetId = internalIdMap.get(String(rel.end));
+        if (sourceId && targetId) {
+          const edgeId = `${sourceId}-${rel.type}-${targetId}`;
+          if (!edgesMap.has(edgeId)) {
+            edgesMap.set(edgeId, {
+              id: edgeId,
+              source: sourceId,
+              target: targetId,
+              type: rel.type,
+              properties: rel.properties || {},
+            });
+          }
         }
       }
     }
   }
 
   const nodes = Array.from(nodesMap.values());
-  // Sort by source node relevance descending, cap at MAX_EDGES
+
+  // Sort edges by source node relevance, cap at MAX_EDGES
   const allEdges = Array.from(edgesMap.values()).sort((a, b) => {
     const relA = nodesMap.get(a.source)?.relevance ?? 0;
     const relB = nodesMap.get(b.source)?.relevance ?? 0;
@@ -52,7 +95,6 @@ export function mapNeo4jToGraph(
   // Determine center node
   let centerNodeId = centerHint || "";
   if (!centerNodeId && nodes.length > 0) {
-    // Prefer Profile nodes as center
     const profile = nodes.find((n) => n.label === "Profile");
     centerNodeId = profile?.id || nodes[0].id;
   }
@@ -67,27 +109,21 @@ export function mapNeo4jToGraph(
     edges,
     timeline,
     centerNodeId,
-    summary: {
-      total_nodes: nodes.length,
-      total_edges: edges.length,
-      node_breakdown: nodeBreakdown,
-    },
+    summary: { total_nodes: nodes.length, total_edges: edges.length, node_breakdown: nodeBreakdown },
   };
 }
 
-// Convert Neo4j native types (DateTime, Integer) to plain JS values
+// Convert Neo4j DateTime/Integer objects to plain JS values
 function sanitizeValue(v: unknown): unknown {
   if (v === null || v === undefined) return v;
   if (typeof v === "string" || typeof v === "boolean") return v;
   if (typeof v === "number") return v;
 
-  // Neo4j Integer: { low, high }
   if (typeof v === "object" && "low" in (v as object) && "high" in (v as object)) {
     const obj = v as { low: number; high: number };
     return obj.high === 0 ? obj.low : obj.high * 4294967296 + obj.low;
   }
 
-  // Neo4j DateTime: has year, month, day fields
   if (typeof v === "object" && "year" in (v as object) && "month" in (v as object) && "day" in (v as object)) {
     const dt = v as Record<string, unknown>;
     const y = sanitizeValue(dt.year);
@@ -126,8 +162,8 @@ function mapNode(value: unknown, vertical: VerticalConfig): GraphNode | null {
   const color = vertical.colors[label] || "#6b7280";
   const nodeType = vertical.nodeTypes.find((n) => n.label === label);
   const displayName = nodeType
-    ? String(props[nodeType.displayName] || label)
-    : String(props.name || props.id || label);
+    ? String(sanitizeValue(props[nodeType.displayName]) || label)
+    : String(sanitizeValue(props.name) || sanitizeValue(props.id) || label);
 
   return {
     id,
@@ -139,17 +175,15 @@ function mapNode(value: unknown, vertical: VerticalConfig): GraphNode | null {
   };
 }
 
-function mapEdge(value: unknown): GraphEdge | null {
-  const rel = value as Neo4jRelationship;
-  if (!rel.type) return null;
-
-  return {
-    id: `edge-${rel.start}-${rel.type}-${rel.end}`,
-    source: String(rel.start),
-    target: String(rel.end),
-    type: rel.type,
-    properties: rel.properties || {},
-  };
+function getInternalId(node: Neo4jNode): string | null {
+  // Neo4j nodes have an internal integer ID accessible via elementId or id
+  const n = node as unknown as Record<string, unknown>;
+  if (n.elementId) return String(n.elementId);
+  if (n.identity) {
+    const id = n.identity as { low?: number; high?: number };
+    return id.low !== undefined ? String(id.low) : null;
+  }
+  return null;
 }
 
 function getNodeId(props: Record<string, unknown>, label: string): string {
@@ -174,7 +208,7 @@ function buildTimeline(nodes: GraphNode[]): TimelineEntry[] {
   const byDate = new Map<string, GraphNode[]>();
   for (const n of eventNodes) {
     const ts = String(n.properties.timestamp);
-    const date = ts.slice(0, 10); // YYYY-MM-DD
+    const date = ts.slice(0, 10);
     if (!byDate.has(date)) byDate.set(date, []);
     byDate.get(date)!.push(n);
   }
@@ -185,9 +219,7 @@ function buildTimeline(nodes: GraphNode[]): TimelineEntry[] {
       date,
       events,
       count: events.length,
-      totalAmount: events.reduce(
-        (sum, e) => sum + (Number(e.properties.amount) || 0), 0
-      ),
+      totalAmount: events.reduce((sum, e) => sum + (Number(e.properties.amount) || 0), 0),
       topEventType: events[0]?.properties.event_type as string || events[0]?.properties.type as string || "",
     }));
 }

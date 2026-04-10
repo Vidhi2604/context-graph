@@ -2,6 +2,8 @@ import { ConnectorAdapter, ConnectorConfig, ConnectorType } from "@/types/connec
 import { HubSpotAdapter } from "./hubspot";
 import { ZendeskAdapter } from "./zendesk";
 import { NurixAdapter } from "./nurix";
+import { SalesforceAdapter } from "./salesforce";
+import { ZohoAdapter } from "./zoho";
 
 // ── Adapter registry ──────────────────────────────────────────────
 
@@ -9,6 +11,8 @@ const ADAPTERS: Record<ConnectorType, ConnectorAdapter> = {
   hubspot: HubSpotAdapter,
   zendesk: ZendeskAdapter,
   nurix: NurixAdapter,
+  salesforce: SalesforceAdapter as unknown as ConnectorAdapter,
+  zoho: ZohoAdapter as unknown as ConnectorAdapter,
 };
 
 export function getAdapter(type: ConnectorType): ConnectorAdapter {

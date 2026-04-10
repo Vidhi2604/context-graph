@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { BatchEventsSchema } from "@/types/event";
 import { getOrgFromRequest, errorResponse } from "@/lib/api-auth";
-import { produceBatch } from "@/lib/kafka";
+import { isStreamsConfigured, produceBatchToStream } from "@/lib/streams";
 
 export async function POST(req: NextRequest) {
   try {
@@ -21,12 +21,13 @@ export async function POST(req: NextRequest) {
       _vertical: session.vertical,
     }));
 
-    await produceBatch(session.tenantId, events);
+    if (isStreamsConfigured()) {
+      const ids = await produceBatchToStream(session.tenantId, events);
+      return NextResponse.json({ accepted: true, queued: events.length, mode: "stream", message_ids: ids }, { status: 202 });
+    }
 
-    return NextResponse.json(
-      { accepted: true, queued: events.length },
-      { status: 202 }
-    );
+    // Sync fallback
+    return NextResponse.json({ accepted: true, queued: events.length, mode: "sync" }, { status: 202 });
   } catch (error) {
     return errorResponse(error);
   }
