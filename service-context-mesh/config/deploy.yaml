@@ -17,6 +17,9 @@ ingress:
         - path: /
           pathType: Prefix
 
+service:
+  targetPort: 3000
+
 application:
   container:
     port: 3000
