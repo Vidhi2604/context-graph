@@ -9,7 +9,7 @@ docker:
 
 ingress:
   enabled: true
-  host: context-mesh.hack-apr-26.nurixlabs.com
+  host: context-mesh.hack.nurixlabs.tech
   path: /
   pathType: Prefix
 
