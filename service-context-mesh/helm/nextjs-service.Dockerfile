@@ -18,4 +18,4 @@ RUN npm run build
 ENV NODE_ENV=production
 EXPOSE 3000
 ENV PORT=3000 HOSTNAME="0.0.0.0"
-CMD ["sh", "-c", "node_modules/.bin/prisma db push --skip-generate && node .next/standalone/server.js"]
+CMD ["node", ".next/standalone/server.js"]
