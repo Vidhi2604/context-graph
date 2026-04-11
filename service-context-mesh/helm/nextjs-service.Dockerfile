@@ -17,7 +17,7 @@ RUN npm run build
 
 # Copy static assets into standalone output (required for CSS/JS to be served)
 RUN cp -r .next/static .next/standalone/.next/static && \
-    cp -r public .next/standalone/public
+    if [ -d public ]; then cp -r public .next/standalone/public; fi
 
 ENV NODE_ENV=production
 
