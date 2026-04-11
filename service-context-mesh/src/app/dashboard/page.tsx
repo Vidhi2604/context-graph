@@ -14,6 +14,7 @@ import ActivityPanel from "@/components/ActivityPanel";
 import FilterBar from "@/components/FilterBar";
 import OrgSwitcher from "@/components/OrgSwitcher";
 import Logo from "@/components/Logo";
+import CSVUpload from "@/components/CSVUpload";
 import { GraphNode, GraphResult, InsightResponse } from "@/types/graph";
 import { PipelineTrace } from "@/lib/trace";
 import { getVertical } from "@/verticals/registry";
@@ -34,6 +35,7 @@ export default function DashboardPage() {
   const [, setTrace] = useState<PipelineTrace | null>(null);
   const [lastQuery, setLastQuery] = useState("");
   const [activeFilters, setActiveFilters] = useState<Record<string, string[]>>({});
+  const [showCSVUpload, setShowCSVUpload] = useState(false);
 
   const { data: session, status } = useSession({
     required: true,
@@ -284,6 +286,12 @@ export default function DashboardPage() {
               <Link href="/dashboard/agents" className="px-2 py-1 text-gray-500 hover:text-white transition-colors">Agents</Link>
               <Link href="/dashboard/commitments" className="px-2 py-1 text-gray-500 hover:text-white transition-colors">Commitments</Link>
               <Link href="/settings" className="px-2 py-1 text-gray-500 hover:text-white transition-colors">Settings</Link>
+              <button
+                onClick={() => setShowCSVUpload(true)}
+                className="px-2 py-1 text-gray-500 hover:text-white transition-colors"
+              >
+                ↑ Bulk Upload
+              </button>
             </nav>
             {/* Debug toggle */}
             <button
@@ -417,6 +425,14 @@ export default function DashboardPage() {
           orgId={orgId}
           resetKey={activityKey}
           onClose={() => setDebugMode(false)}
+        />
+      )}
+
+      {showCSVUpload && (
+        <CSVUpload
+          orgId={orgId}
+          vertical={vertical}
+          onClose={() => setShowCSVUpload(false)}
         />
       )}
     </div>
