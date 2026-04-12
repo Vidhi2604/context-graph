@@ -83,7 +83,7 @@ export const NurixAdapter: ConnectorAdapter = {
           )
           .slice(0, 100);
         // Fetch phone numbers for unique user_ids in batches of 10
-        const uniqueUserIds = Array.from(new Set(conversations.map((c: Record<string, unknown>) => String(c.user_id)).filter(Boolean)));
+        const uniqueUserIds: string[] = Array.from(new Set(conversations.map((c: Record<string, unknown>) => String(c.user_id)).filter(Boolean)));
         const phoneMap: Record<string, string> = {};
         for (let i = 0; i < uniqueUserIds.length; i += 10) {
           const batch = uniqueUserIds.slice(i, i + 10);
@@ -92,7 +92,7 @@ export const NurixAdapter: ConnectorAdapter = {
               headers: { "workspace-id": workspaceId, "Content-Type": "application/json" },
             });
             if (r.ok) {
-              const u = await r.json();
+              const u = await r.json() as Record<string, string>;
               const phone = u.decrypted_identifier || u.masked_identifier;
               if (phone && u.identifier_type === "phone") phoneMap[uid] = phone;
             }
