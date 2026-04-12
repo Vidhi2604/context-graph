@@ -46,14 +46,21 @@ export async function detectPolicyDrift(
       { tenantId, threshold }
     );
 
-    return results.map((r, i) => ({
-      alert_id: `drift_${i}`,
-      type: "policy_drift" as const,
-      severity: r.override_rate > 0.6 ? "critical" as const : "warning" as const,
-      title: `${r.policy} ${r.version}: ${Math.round(r.override_rate * 100)}% override rate`,
-      description: `${r.overrides} overrides out of ${r.total} total applications in the last 90 days.`,
-      data: r as unknown as Record<string, unknown>,
-    }));
+    const toN = (v: unknown): number => (v && typeof v === "object" && "low" in v) ? (v as {low: number}).low : Number(v) || 0;
+
+    return results.map((r, i) => {
+      const overrides = toN(r.overrides);
+      const total = toN(r.total);
+      const overrideRate = typeof r.override_rate === "number" ? r.override_rate : toN(r.override_rate);
+      return {
+        alert_id: `drift_${i}`,
+        type: "policy_drift" as const,
+        severity: overrideRate > 0.6 ? "critical" as const : "warning" as const,
+        title: `${r.policy} ${r.version}: ${Math.round(overrideRate * 100)}% override rate`,
+        description: `${overrides} overrides out of ${total} total applications in the last 90 days.`,
+        data: { policy: r.policy, version: r.version, status: "active", override_rate: overrideRate, overrides, total },
+      };
+    });
   } catch {
     return [];
   }
@@ -94,14 +101,21 @@ export async function detectAnomalySpikes(
       { tenantId, spikeMultiplier }
     );
 
-    return results.map((r, i) => ({
-      alert_id: `spike_${i}`,
-      type: "anomaly_spike" as const,
-      severity: r.multiplier > 3 ? "critical" as const : "warning" as const,
-      title: `${r.event_type.replace(/_/g, " ")} spiked ${r.multiplier}x this week`,
-      description: `${r.this_week} this week vs ${r.weekly_avg} weekly average.`,
-      data: r as unknown as Record<string, unknown>,
-    }));
+    const toN = (v: unknown): number => (v && typeof v === "object" && "low" in v) ? (v as {low: number}).low : Number(v) || 0;
+
+    return results.map((r, i) => {
+      const thisWeek = toN(r.this_week);
+      const weeklyAvg = toN(r.weekly_avg);
+      const multiplier = toN(r.multiplier);
+      return {
+        alert_id: `spike_${i}`,
+        type: "anomaly_spike" as const,
+        severity: multiplier > 3 ? "critical" as const : "warning" as const,
+        title: `${String(r.event_type).replace(/_/g, " ")} spiked ${multiplier}x this week`,
+        description: `${thisWeek} this week vs ${weeklyAvg} weekly average.`,
+        data: { event_type: r.event_type, this_week: thisWeek, weekly_avg: weeklyAvg, multiplier },
+      };
+    });
   } catch {
     return [];
   }

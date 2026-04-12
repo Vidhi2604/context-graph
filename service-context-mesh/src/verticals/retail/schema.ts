@@ -121,7 +121,7 @@ export const retailVertical: VerticalConfig = {
     { id: "tier", label: "Tier", type: "select", options: ["Bronze", "Silver", "Gold", "Platinum"], cypherField: "p.tier" },
     { id: "city", label: "City", type: "select", options: ["Bangalore", "Mumbai", "Delhi", "Chennai", "Hyderabad"], cypherField: "p.city" },
     { id: "category", label: "Category", type: "select", options: ["Footwear", "Apparel", "Accessories"], cypherField: "prod.category" },
-    { id: "payment", label: "Payment", type: "select", options: ["COD", "UPI", "Credit Card", "Debit Card"], cypherField: "pay.method" },
+    { id: "payment", label: "Payment", type: "select", options: ["COD", "UPI", "Credit Card", "Debit Card"], cypherField: "e.payment_method" },
     { id: "status", label: "Status", type: "select", options: ["completed", "pending", "exception", "denied"], cypherField: "e.status" },
     { id: "dateRange", label: "Date Range", type: "date", cypherField: "e.timestamp" },
   ],

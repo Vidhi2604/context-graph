@@ -37,13 +37,12 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const orgId = session?.orgId || (typeof window !== "undefined" ? localStorage.getItem("orgId") || "" : "");
-  const vertical = session?.vertical || (typeof window !== "undefined" ? localStorage.getItem("vertical") || "retail" : "retail");
+  const orgId = session?.orgId || "";
+  const vertical = session?.vertical || "retail";
 
   useEffect(() => {
     // GET /api/org requires userId query param — get from session or localStorage
-    const userId = (session?.user as { id?: string })?.id
-      || (typeof window !== "undefined" ? localStorage.getItem("userId") || "" : "");
+    const userId = (session?.user as { id?: string })?.id || "";
 
     if (!userId && !orgId) return;
 
@@ -65,10 +64,17 @@ export default function SettingsPage() {
   const handleSaveOrg = async () => {
     setSaving(true);
     setSaved(false);
-    await new Promise((r) => setTimeout(r, 500)); // simulate save
+    try {
+      await fetch("/api/org", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orgId, name: orgName }),
+      });
+      if (typeof window !== "undefined") localStorage.setItem("orgName", orgName);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch {}
     setSaving(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
   };
 
   const handlePlanChange = async (planId: string) => {
@@ -222,8 +228,14 @@ export default function SettingsPage() {
         {/* Connectors — Pull data IN */}
         <ConnectorsSection orgId={orgId} />
 
+        {/* CSV / Google Sheets Import */}
+        <CSVImportSection orgId={orgId} />
+
         {/* Webhooks */}
         <WebhooksSection orgId={orgId} />
+
+        {/* MCP / API Access */}
+        <MCPAccessSection orgId={orgId} apiKey={apiKey} />
 
         {/* Danger zone */}
         <section className="bg-gray-900 border border-red-900/30 rounded-xl p-6">
@@ -253,29 +265,37 @@ export default function SettingsPage() {
 
 const CONNECTOR_ICONS: Record<string, React.ReactNode> = {
   hubspot: (
-    <svg viewBox="0 0 24 24" className="w-7 h-7" fill="#ff7a59">
-      <path d="M18.164 7.93V5.084a2.198 2.198 0 0 0 1.266-1.978V3.04a2.198 2.198 0 0 0-2.195-2.195h-.066a2.198 2.198 0 0 0-2.195 2.195v.066a2.198 2.198 0 0 0 1.266 1.978V7.93a6.232 6.232 0 0 0-2.963 1.302L5.85 4.533a2.45 2.45 0 1 0-1.124 1.232l7.285 4.694a6.246 6.246 0 0 0-.925 3.285c0 1.07.27 2.076.746 2.953l-2.215 2.215a1.917 1.917 0 1 0 1.061 1.06l2.215-2.215a6.232 6.232 0 0 0 3.447 1.038c3.445 0 6.237-2.792 6.237-6.237a6.232 6.232 0 0 0-4.413-5.928zm-1.929 9.315a3.39 3.39 0 1 1 0-6.78 3.39 3.39 0 0 1 0 6.78z"/>
-    </svg>
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src="/logos/hubspot.svg" alt="HubSpot" className="w-7 h-7 object-contain" />
   ),
   zendesk: (
-    <svg viewBox="0 0 24 24" className="w-7 h-7" fill="#03363d">
-      <path d="M11.5 0C5.149 0 0 5.149 0 11.5S5.149 23 11.5 23 23 17.851 23 11.5 17.851 0 11.5 0zm-2 15.5l-5-5h10l-5 5zm5-7l-5-5 5 5V3h5v10h-5V8.5z"/>
-    </svg>
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src="/logos/zendesk.svg" alt="Zendesk" className="w-7 h-7 object-contain" />
   ),
   salesforce: (
-    <div className="w-7 h-7 rounded-full flex items-center justify-center" style={{background: '#00a1e0'}}>
-      <svg viewBox="0 0 32 20" className="w-6 h-4" fill="white">
-        <path d="M13.3 2.5C14.4 1.3 16 .5 17.8.5c2.3 0 4.3 1.3 5.4 3.2.9-.4 1.9-.6 3-.6 4.1 0 7.4 3.4 7.4 7.5s-3.3 7.5-7.4 7.5c-.5 0-1-.1-1.5-.2-.9 1.6-2.6 2.6-4.6 2.6-.8 0-1.5-.2-2.2-.5-.9 2-2.9 3.4-5.2 3.4-2.4 0-4.5-1.5-5.4-3.6-.4.1-.8.1-1.2.1C3.3 20 0 16.7 0 12.6c0-2.2 1.2-4.2 3-5.2-.2-.6-.3-1.2-.3-1.8C2.7 2.5 5.2 0 8.2 0c2 0 3.8 1 4.9 2.5z"/>
-      </svg>
-    </div>
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src="/logos/salesforce.svg" alt="Salesforce" className="w-7 h-7 object-contain" />
   ),
   zoho: (
-    <div className="w-7 h-7 rounded flex items-center justify-center" style={{background: '#e42527'}}>
-      <span className="text-white text-sm font-bold">Z</span>
-    </div>
+    <svg viewBox="0 0 120 55" className="w-10 h-6">
+      <rect x="2" y="2" width="30" height="30" rx="6" fill="none" stroke="#e42527" strokeWidth="5"/>
+      <rect x="22" y="12" width="30" height="30" rx="6" fill="none" stroke="#179c3d" strokeWidth="5"/>
+      <rect x="42" y="2" width="30" height="30" rx="6" fill="none" stroke="#2b6cb0" strokeWidth="5"/>
+      <rect x="62" y="12" width="30" height="30" rx="6" fill="none" stroke="#e8a020" strokeWidth="5"/>
+    </svg>
   ),
   nurix: (
-    <div className="w-7 h-7 rounded-full bg-emerald-600 flex items-center justify-center text-white text-xs font-bold">N</div>
+    <svg viewBox="0 0 100 100" className="w-7 h-7">
+      {/* Blue left stroke of X (top-left to bottom-right) */}
+      <polygon points="5,5 35,5 95,95 65,95" fill="#4d6ef5"/>
+      {/* Dark navy right stroke of X (top-right to bottom-left) */}
+      <polygon points="65,5 95,5 35,95 5,95" fill="#0f1f5c"/>
+    </svg>
+  ),
+  mcp: (
+    <div className="w-7 h-7 rounded-lg bg-violet-900/50 border border-violet-700 flex items-center justify-center text-violet-400 text-xs font-bold">
+      MCP
+    </div>
   ),
   custom: (
     <div className="w-7 h-7 rounded-full bg-gray-700 flex items-center justify-center">
@@ -291,7 +311,8 @@ const CONNECTORS = [
   { id: "zendesk",   name: "Zendesk",    desc: "Support tickets, CSAT, escalations",     credFields: [{ key: "subdomain", label: "Subdomain", type: "text" }, { key: "email", label: "Admin Email", type: "text" }, { key: "api_token", label: "API Token", type: "password" }] },
   { id: "salesforce",name: "Salesforce", desc: "Leads, contacts, cases, opportunities",  credFields: [{ key: "access_token", label: "Access Token", type: "password" }, { key: "instance_url", label: "Instance URL", type: "text" }] },
   { id: "zoho",      name: "Zoho CRM",   desc: "Contacts, leads, calls",                 credFields: [{ key: "access_token", label: "Access Token", type: "password" }, { key: "org_id", label: "Org ID", type: "text" }] },
-  { id: "nurix",     name: "Nurix",      desc: "AI voice call transcripts",              credFields: [{ key: "api_url", label: "API URL", type: "text" }, { key: "api_key", label: "API Key", type: "password" }, { key: "agent_id", label: "Agent ID", type: "text" }] },
+  { id: "nurix",     name: "Nurix",      desc: "AI voice call transcripts",              credFields: [{ key: "api_url", label: "API URL", type: "text" }, { key: "workspace_id", label: "Workspace ID", type: "password" }] },
+  { id: "mcp",       name: "MCP Server", desc: "Any MCP-compatible data source",         credFields: [{ key: "server_url", label: "MCP Server URL", type: "text" }, { key: "api_key", label: "API Key (optional)", type: "password" }] },
   { id: "custom",    name: "Custom",     desc: "Any system via REST API",                credFields: [{ key: "api_url", label: "API URL", type: "text" }, { key: "api_key", label: "API Key", type: "password" }] },
 ];
 
@@ -307,6 +328,7 @@ const WEBHOOK_TRIGGERS = [
 
 function ConnectorsSection({ orgId }: { orgId: string }) {
   const [connected, setConnected] = useState<Record<string, boolean>>({});
+  const [connectorIds, setConnectorIds] = useState<Record<string, string>>({});
   const [expanding, setExpanding] = useState<string | null>(null);
   const [creds, setCreds] = useState<Record<string, Record<string, string>>>({});
   const [syncing, setSyncing] = useState<string | null>(null);
@@ -319,8 +341,10 @@ function ConnectorsSection({ orgId }: { orgId: string }) {
       .then(r => r.json())
       .then(data => {
         const conn: Record<string, boolean> = {};
-        for (const c of data.connectors || []) conn[c.type] = true;
+        const ids: Record<string, string> = {};
+        for (const c of data.connectors || []) { conn[c.type] = true; ids[c.type] = c.id; }
         setConnected(conn);
+        setConnectorIds(ids);
       })
       .catch(() => {});
   }, [orgId]);
@@ -338,6 +362,7 @@ function ConnectorsSection({ orgId }: { orgId: string }) {
       const data = await res.json();
       if (res.ok) {
         setConnected(p => ({ ...p, [connId]: true }));
+        setConnectorIds(p => ({ ...p, [connId]: data.connector?.id || "" }));
         setStatus(p => ({ ...p, [connId]: data.connection_test?.detail || "Connected" }));
         setExpanding(null);
       } else {
@@ -348,18 +373,43 @@ function ConnectorsSection({ orgId }: { orgId: string }) {
     }
   };
 
+  const handleDisconnect = async (connId: string) => {
+    const dbConnectorId = connectorIds[connId];
+    if (!dbConnectorId) return;
+    try {
+      await fetch("/api/connectors", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json", "x-org-id": orgId },
+        body: JSON.stringify({ connector_id: dbConnectorId }),
+      });
+      setConnected(p => ({ ...p, [connId]: false }));
+      setConnectorIds(p => { const n = { ...p }; delete n[connId]; return n; });
+      setStatus(p => ({ ...p, [connId]: "" }));
+    } catch {
+      setStatus(p => ({ ...p, [connId]: "Disconnect failed" }));
+    }
+  };
+
   const handleSync = async (connId: string) => {
     setSyncing(connId);
+    setStatus(p => ({ ...p, [connId]: "Syncing... (may take 30s)" }));
     try {
+      const dbConnectorId = connectorIds[connId];
+      const body = dbConnectorId ? { connector_id: dbConnectorId } : { type: connId };
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 90000); // 90s timeout
       const res = await fetch("/api/connectors/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-org-id": orgId },
-        body: JSON.stringify({ type: connId }),
+        body: JSON.stringify(body),
+        signal: controller.signal,
       });
+      clearTimeout(timeout);
       const data = await res.json();
-      setStatus(p => ({ ...p, [connId]: `Synced ${data.sync_result?.events_synced || 0} events` }));
-    } catch {
-      setStatus(p => ({ ...p, [connId]: "Sync failed" }));
+      setStatus(p => ({ ...p, [connId]: `✓ Synced ${data.sync_result?.events_synced || 0} events` }));
+    } catch (e) {
+      const msg = e instanceof Error && e.name === "AbortError" ? "Sync timed out — data may still be processing" : "Sync failed";
+      setStatus(p => ({ ...p, [connId]: msg }));
     } finally {
       setSyncing(null);
     }
@@ -419,18 +469,234 @@ function ConnectorsSection({ orgId }: { orgId: string }) {
                   </>
                 )}
                 {isConn && (
-                  <button
-                    onClick={() => handleSync(c.id)}
-                    disabled={syncing === c.id}
-                    className="flex-1 text-xs bg-gray-700 hover:bg-gray-600 disabled:opacity-50 py-1.5 rounded-lg transition-colors"
-                  >
-                    {syncing === c.id ? "Syncing..." : "Sync Now"}
-                  </button>
+                  <>
+                    <button
+                      onClick={() => handleSync(c.id)}
+                      disabled={syncing === c.id}
+                      className="flex-1 text-xs bg-gray-700 hover:bg-gray-600 disabled:opacity-50 py-1.5 rounded-lg transition-colors"
+                    >
+                      {syncing === c.id ? "Syncing..." : "Sync Now"}
+                    </button>
+                    <button
+                      onClick={() => handleDisconnect(c.id)}
+                      className="text-xs text-red-400 hover:bg-red-900/20 px-2 py-1.5 rounded-lg transition-colors border border-red-900/30"
+                    >
+                      Disconnect
+                    </button>
+                  </>
                 )}
               </div>
             </div>
           );
         })}
+      </div>
+    </section>
+  );
+}
+
+// ── Import Data Section ───────────────────────────────────────────
+
+type ImportTab = "json" | "csv" | "sheets";
+
+function CSVImportSection({ orgId }: { orgId: string }) {
+  const [tab, setTab] = useState<ImportTab>("csv");
+  const [text, setText] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [sheetUrl, setSheetUrl] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<Record<string, unknown> | null>(null);
+  const [error, setError] = useState("");
+
+  const reset = () => { setText(""); setFile(null); setSheetUrl(""); setError(""); setResult(null); };
+
+  const handleImport = async () => {
+    setLoading(true); setError(""); setResult(null);
+    try {
+      let res: Response;
+      if (tab === "json") {
+        let payload: unknown;
+        try { payload = JSON.parse(text); } catch { setError("Invalid JSON"); setLoading(false); return; }
+        res = await fetch("/api/ingest/raw", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-org-id": orgId },
+          body: JSON.stringify(Array.isArray(payload) ? payload : [payload]),
+        });
+      } else if (tab === "csv") {
+        if (file) {
+          const form = new FormData();
+          form.append("file", file);
+          res = await fetch("/api/ingest/csv", { method: "POST", headers: { "x-org-id": orgId }, body: form });
+        } else {
+          res = await fetch("/api/ingest/csv", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-org-id": orgId },
+            body: JSON.stringify({ csv_text: text }),
+          });
+        }
+      } else {
+        res = await fetch("/api/ingest/csv", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-org-id": orgId },
+          body: JSON.stringify({ sheet_url: sheetUrl }),
+        });
+      }
+      const data = await res.json();
+      if (!res.ok) setError(data.error || "Import failed");
+      else setResult(data);
+    } catch { setError("Something went wrong"); }
+    finally { setLoading(false); }
+  };
+
+  const canImport = tab === "sheets" ? !!sheetUrl : (!!text.trim() || !!file);
+
+  return (
+    <section className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+      <h2 className="text-base font-semibold mb-1">Import Data</h2>
+      <p className="text-sm text-gray-400 mb-5">Upload CSV, paste JSON, or connect a Google Sheet — we map and ingest it automatically.</p>
+
+      <div className="flex gap-1 bg-gray-800 rounded-xl p-1 w-fit mb-4">
+        {([["csv", "CSV"], ["json", "JSON"], ["sheets", "Google Sheets"]] as [ImportTab, string][]).map(([id, label]) => (
+          <button key={id} onClick={() => { setTab(id); reset(); }}
+            className={`px-4 py-1.5 text-sm rounded-lg transition-colors font-medium ${tab === id ? "bg-gray-700 text-white" : "text-gray-400 hover:text-gray-200"}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "csv" && (
+        <div className="space-y-3">
+          <label className="block border-2 border-dashed border-gray-700 rounded-xl p-5 text-center cursor-pointer hover:border-emerald-600 transition-colors">
+            <input type="file" accept=".csv" className="hidden" onChange={e => { setFile(e.target.files?.[0] || null); setText(""); }} />
+            {file ? <span className="text-sm text-emerald-400">{file.name}</span> : <span className="text-sm text-gray-500">Click to upload .csv file</span>}
+          </label>
+          {!file && <textarea value={text} onChange={e => setText(e.target.value)} rows={4} placeholder={"email,name,event\nuser@example.com,Priya,purchase"} className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-sm font-mono text-white placeholder:text-gray-600 focus:outline-none focus:border-emerald-500 resize-none" />}
+        </div>
+      )}
+
+      {tab === "json" && (
+        <div className="space-y-2">
+          <div className="flex justify-between"><span className="text-sm text-gray-400">Paste JSON array or object</span>
+            <button onClick={() => setText(JSON.stringify([{email:"user@example.com",event:"purchase",amount:999}],null,2))} className="text-xs text-emerald-400 hover:underline">Load example</button>
+          </div>
+          <textarea value={text} onChange={e => setText(e.target.value)} rows={8} placeholder={'[{"email":"user@example.com","event":"purchase"}]'} className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-sm font-mono text-white placeholder:text-gray-600 focus:outline-none focus:border-emerald-500 resize-none" />
+        </div>
+      )}
+
+      {tab === "sheets" && (
+        <div className="space-y-2">
+          <label className="text-sm text-gray-400 block">Public Google Sheets URL</label>
+          <input type="text" value={sheetUrl} onChange={e => setSheetUrl(e.target.value)} placeholder="https://docs.google.com/spreadsheets/d/..." className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-emerald-500" />
+        </div>
+      )}
+
+      {error && <div className="bg-red-950/50 border border-red-800 rounded-lg px-4 py-2 text-red-400 text-sm mt-3">{error}</div>}
+
+      {result && (
+        <div className="bg-emerald-950/30 border border-emerald-800 rounded-lg px-4 py-3 text-sm mt-3 space-y-1">
+          <div className="text-emerald-400 font-medium">Import successful</div>
+          <div className="text-gray-400 text-xs">Mapped: {String(result.events_mapped ?? result.total_rows ?? 0)} · Ingested: {String(result.events_ingested ?? 0)} · Skipped: {String(result.events_skipped ?? result.skipped ?? 0)}</div>
+          {Array.isArray(result.columns_detected) && <div className="text-gray-500 text-xs">Columns: {(result.columns_detected as string[]).join(", ")}</div>}
+        </div>
+      )}
+
+      <button onClick={handleImport} disabled={loading || !canImport} className="mt-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 px-5 py-2 rounded-xl text-sm font-medium transition-colors">
+        {loading ? "Importing..." : "Import & Build Graph"}
+      </button>
+    </section>
+  );
+}
+
+// ── MCP / API Access Section ─────────────────────────────────────
+
+function MCPAccessSection({ apiKey }: { orgId: string; apiKey: string }) {
+  const [copied, setCopied] = useState<string | null>(null);
+  const [keyVisible, setKeyVisible] = useState(false);
+
+  const mcpUrl = typeof window !== "undefined"
+    ? `${window.location.origin}/api/mcp`
+    : "/api/mcp";
+
+  const copy = (text: string, label: string) => {
+    navigator.clipboard.writeText(text);
+    setCopied(label);
+    setTimeout(() => setCopied(null), 2000);
+  };
+
+  return (
+    <section className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+      <h2 className="text-base font-semibold mb-1">MCP / API Access</h2>
+      <p className="text-sm text-gray-400 mb-5">
+        Connect any AI agent or tool to ContextMesh. Use these credentials to let your Nurix voice agents, Claude, or any MCP-compatible tool query customer context in real-time.
+      </p>
+
+      <div className="space-y-4">
+        {/* MCP Endpoint */}
+        <div>
+          <label className="text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1.5">MCP Server URL</label>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-sm text-emerald-400 font-mono truncate">
+              {mcpUrl}
+            </code>
+            <button onClick={() => copy(mcpUrl, "url")}
+              className="text-xs px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-lg hover:bg-gray-700 transition-colors shrink-0">
+              {copied === "url" ? "Copied!" : "Copy"}
+            </button>
+          </div>
+        </div>
+
+        {/* API Key */}
+        <div>
+          <label className="text-xs font-medium text-gray-500 uppercase tracking-wider block mb-1.5">API Key</label>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-sm text-gray-300 font-mono truncate">
+              {keyVisible ? (apiKey || "—") : (apiKey ? `${apiKey.slice(0, 12)}${"•".repeat(20)}` : "—")}
+            </code>
+            <button onClick={() => setKeyVisible(v => !v)}
+              className="text-xs px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-lg hover:bg-gray-700 transition-colors shrink-0">
+              {keyVisible ? "Hide" : "Show"}
+            </button>
+            <button onClick={() => copy(apiKey, "key")}
+              className="text-xs px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-lg hover:bg-gray-700 transition-colors shrink-0">
+              {copied === "key" ? "Copied!" : "Copy"}
+            </button>
+          </div>
+        </div>
+
+        {/* Available tools */}
+        <div>
+          <label className="text-xs font-medium text-gray-500 uppercase tracking-wider block mb-2">Available Tools</label>
+          <div className="grid grid-cols-2 gap-2">
+            {[
+              { name: "get_context", desc: "Get full customer brief by phone/email — use this in Nurix agents" },
+              { name: "search", desc: "Natural language search across the context graph" },
+              { name: "analyze", desc: "AI reasoning chain on current graph data" },
+              { name: "track_event", desc: "Ingest a new event from any system" },
+              { name: "get_commitments", desc: "Fetch open/breached commitments for a customer" },
+              { name: "get_alerts", desc: "Get active proactive alerts" },
+            ].map(tool => (
+              <div key={tool.name} className="bg-gray-800/50 border border-gray-700/50 rounded-lg px-3 py-2.5">
+                <div className="text-xs font-mono text-violet-400">{tool.name}</div>
+                <div className="text-xs text-gray-500 mt-0.5">{tool.desc}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Nurix agent example */}
+        <div className="bg-gray-800/50 border border-gray-700/50 rounded-lg p-4">
+          <div className="text-xs font-medium text-gray-400 mb-2">Example: Nurix agent call</div>
+          <pre className="text-xs text-gray-300 font-mono whitespace-pre-wrap leading-relaxed">{`POST ${mcpUrl}
+Authorization: Bearer ${apiKey ? apiKey.slice(0, 20) + "..." : "<your-api-key>"}
+Content-Type: application/json
+
+{
+  "method": "tools/call",
+  "params": {
+    "name": "get_context",
+    "arguments": { "phone": "{{customer_phone}}" }
+  }
+}`}</pre>
+        </div>
       </div>
     </section>
   );

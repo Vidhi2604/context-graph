@@ -4,6 +4,8 @@ import { ZendeskAdapter } from "./zendesk";
 import { NurixAdapter } from "./nurix";
 import { SalesforceAdapter } from "./salesforce";
 import { ZohoAdapter } from "./zoho";
+import { MCPAdapter } from "./mcp";
+import { prisma } from "@/lib/prisma";
 
 // ── Adapter registry ──────────────────────────────────────────────
 
@@ -13,6 +15,7 @@ const ADAPTERS: Record<ConnectorType, ConnectorAdapter> = {
   nurix: NurixAdapter,
   salesforce: SalesforceAdapter as unknown as ConnectorAdapter,
   zoho: ZohoAdapter as unknown as ConnectorAdapter,
+  mcp: MCPAdapter,
 };
 
 export function getAdapter(type: ConnectorType): ConnectorAdapter {
@@ -21,35 +24,53 @@ export function getAdapter(type: ConnectorType): ConnectorAdapter {
   return adapter;
 }
 
-// ── In-memory connector store (hackathon) ─────────────────────────
-// Production: Prisma Connector model with encrypted credentials
+// ── DB-backed connector store ─────────────────────────────────────
 
-const connectorStore = new Map<string, ConnectorConfig[]>();
-
-export function getConnectors(tenantId: string): ConnectorConfig[] {
-  return connectorStore.get(tenantId) || [];
+export async function getConnectors(tenantId: string): Promise<ConnectorConfig[]> {
+  const rows = await prisma.connector.findMany({ where: { tenantId } });
+  return rows.map(r => ({
+    id: r.id,
+    type: r.type as ConnectorType,
+    tenantId: r.tenantId,
+    name: r.name,
+    active: r.active,
+    created_at: r.createdAt.toISOString(),
+    credentials: JSON.parse(r.credentials || "{}"),
+  }));
 }
 
-export function saveConnector(config: ConnectorConfig): void {
-  const existing = connectorStore.get(config.tenantId) || [];
-  const idx = existing.findIndex((c) => c.id === config.id);
-  if (idx >= 0) {
-    existing[idx] = config;
-  } else {
-    existing.push(config);
+export async function saveConnector(config: ConnectorConfig): Promise<void> {
+  const { id, type, tenantId, name, active, created_at, ...rest } = config;
+  const credentials = JSON.stringify(rest.credentials || {});
+
+  await prisma.connector.upsert({
+    where: { id: id || "new" },
+    update: { name, active: active ?? true, credentials, updatedAt: new Date() },
+    create: { id, type, tenantId, name, active: active ?? true, credentials },
+  });
+}
+
+export async function deleteConnector(tenantId: string, connectorId: string): Promise<boolean> {
+  try {
+    await prisma.connector.delete({ where: { id: connectorId, tenantId } });
+    return true;
+  } catch {
+    return false;
   }
-  connectorStore.set(config.tenantId, existing);
 }
 
-export function deleteConnector(tenantId: string, connectorId: string): boolean {
-  const existing = connectorStore.get(tenantId) || [];
-  const filtered = existing.filter((c) => c.id !== connectorId);
-  connectorStore.set(tenantId, filtered);
-  return filtered.length < existing.length;
-}
-
-export function getConnector(tenantId: string, connectorId: string): ConnectorConfig | null {
-  return getConnectors(tenantId).find((c) => c.id === connectorId) || null;
+export async function getConnector(tenantId: string, connectorId: string): Promise<ConnectorConfig | null> {
+  const row = await prisma.connector.findFirst({ where: { id: connectorId, tenantId } });
+  if (!row) return null;
+  return {
+    id: row.id,
+    type: row.type as ConnectorType,
+    tenantId: row.tenantId,
+    name: row.name,
+    active: row.active,
+    created_at: row.createdAt.toISOString(),
+    credentials: JSON.parse(row.credentials || "{}"),
+  };
 }
 
 // ── Mask credentials for API responses ───────────────────────────
@@ -59,7 +80,9 @@ export function maskConfig(config: ConnectorConfig): ConnectorConfig {
   masked.credentials = Object.fromEntries(
     Object.entries(config.credentials).map(([k, v]) => [
       k,
-      v.length > 8 ? `${v.slice(0, 4)}${"*".repeat(v.length - 8)}${v.slice(-4)}` : "****",
+      String(v).length > 8
+        ? `${String(v).slice(0, 4)}${"*".repeat(String(v).length - 8)}${String(v).slice(-4)}`
+        : "****",
     ])
   );
   return masked;

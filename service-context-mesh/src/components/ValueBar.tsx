@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 interface ValueBarProps {
   stats: {
     events_tracked: number;
@@ -32,18 +34,38 @@ export default function ValueBar({ stats }: ValueBarProps) {
 
   return (
     <div className="grid grid-cols-5 gap-3">
-      {cards.map((card) => (
-        <div
-          key={card.label}
-          className="bg-gray-900 border border-gray-800 rounded-lg px-3 py-2 text-center"
-        >
-          <div className="text-lg font-bold text-white">{card.value}</div>
-          <div className="text-[10px] text-gray-500">
-            {card.label}
-            {card.sub && <span className="ml-1 text-gray-600">({card.sub})</span>}
+      {cards.map((card) => {
+        const inner = (
+          <>
+            <div className="text-2xl font-bold text-white tracking-tight">{card.value}</div>
+            <div className="text-xs text-gray-400 mt-0.5 font-medium">
+              {card.label}
+              {card.sub && <span className="ml-1 text-gray-500">({card.sub})</span>}
+            </div>
+          </>
+        );
+        if (card.label === "Events Tracked") {
+          return (
+            <Link key={card.label} href="/dashboard/events"
+              className="bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 text-center hover:border-emerald-700 hover:bg-gray-800/60 transition-all cursor-pointer">
+              {inner}
+            </Link>
+          );
+        }
+        if (card.label === "Profiles Resolved") {
+          return (
+            <Link key={card.label} href="/dashboard/profiles"
+              className="bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 text-center hover:border-emerald-700 hover:bg-gray-800/60 transition-all cursor-pointer">
+              {inner}
+            </Link>
+          );
+        }
+        return (
+          <div key={card.label} className="bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 text-center">
+            {inner}
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

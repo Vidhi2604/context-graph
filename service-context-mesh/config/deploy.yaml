@@ -9,31 +9,9 @@ docker:
 
 ingress:
   enabled: true
-  host: context-mesh.hack.nurixlabs.tech
+  host: context-mesh.hack-apr-26.nurixlabs.com
   path: /
   pathType: Prefix
-
-application:
-  container:
-    port: 3000
-    targetPort: 3000
-  healthCheck:
-    liveness:
-      enabled: true
-      path: /
-      port: 3000
-      initialDelaySeconds: 60
-      periodSeconds: 15
-      timeoutSeconds: 10
-      failureThreshold: 5
-    readiness:
-      enabled: true
-      path: /
-      port: 3000
-      initialDelaySeconds: 60
-      periodSeconds: 10
-      timeoutSeconds: 5
-      failureThreshold: 5
 
 resources:
   requests:

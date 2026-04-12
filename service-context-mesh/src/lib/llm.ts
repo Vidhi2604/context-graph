@@ -75,7 +75,7 @@ export async function claudeExtract(
   try {
     const res = await getClient().messages.create({
       model: EXTRACT_MODEL,
-      max_tokens: 1024,
+      max_tokens: 2048,
       system: systemPrompt + "\n\nRespond with valid JSON only. No markdown, no explanation.",
       messages: [{ role: "user", content: userPrompt }],
     });

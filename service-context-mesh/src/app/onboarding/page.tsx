@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useSession } from "next-auth/react";
-import { useRouter } from "next/navigation";
+
 
 const VERTICALS = [
   {
@@ -18,6 +18,13 @@ const VERTICALS = [
     icon: "🏥",
     description: "Patient journeys, clinical decisions, readmissions, insurance claims, protocol adherence",
     examples: ["Hospitals", "Clinics", "Health Systems"],
+  },
+  {
+    id: "cx",
+    name: "Customer Experience",
+    icon: "🎧",
+    description: "Support calls, voice transcripts, tickets, agent performance, resolution tracking",
+    examples: ["Support Teams", "Call Centers", "CX Platforms"],
   },
 ];
 
@@ -45,7 +52,7 @@ const PLANS = [
 
 export default function OnboardingPage() {
   const { data: session } = useSession();
-  const router = useRouter();
+
   const [orgName, setOrgName] = useState("");
   const [vertical, setVertical] = useState<string | null>(null);
   const [plan, setPlan] = useState("enterprise");
@@ -103,7 +110,8 @@ export default function OnboardingPage() {
       // Note: apiKey NOT stored client-side — use server session or settings page to retrieve it
       if (userId) localStorage.setItem("userId", userId);
 
-      router.push("/dashboard");
+      // Force full reload so NextAuth session picks up the new org
+      window.location.href = seedData ? "/dashboard" : "/settings?onboarding=true";
     } catch {
       setError("Something went wrong. Please try again.");
     } finally {
@@ -137,7 +145,7 @@ export default function OnboardingPage() {
         {/* Vertical selection */}
         <div>
           <label className="text-sm text-gray-400 block mb-3">Choose your vertical</label>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-3 gap-4">
             {VERTICALS.map((v) => (
               <button
                 key={v.id}

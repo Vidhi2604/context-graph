@@ -1,4 +1,3 @@
-export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { BatchEventsSchema } from "@/types/event";
 import { getOrgFromRequest, errorResponse } from "@/lib/api-auth";

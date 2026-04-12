@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import Logo from "@/components/Logo";
+import DashboardHeader from "@/components/DashboardHeader";
 
 interface CommitmentRow {
   id: string;
@@ -78,18 +78,7 @@ export default function CommitmentsPage() {
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
-      <header className="border-b border-gray-800 px-6 py-3">
-        <div className="max-w-7xl mx-auto flex items-center gap-4">
-          <Link href="/dashboard"><Logo size={26} showText /></Link>
-          <nav className="flex gap-1 text-sm">
-            <Link href="/dashboard" className="px-3 py-1 rounded text-gray-400 hover:text-white">Search</Link>
-            <Link href="/dashboard/analytics" className="px-3 py-1 rounded text-gray-400 hover:text-white">Analytics</Link>
-            <Link href="/dashboard/policies" className="px-3 py-1 rounded text-gray-400 hover:text-white">Policies</Link>
-            <Link href="/dashboard/agents" className="px-3 py-1 rounded text-gray-400 hover:text-white">Agents</Link>
-            <Link href="/dashboard/commitments" className="px-3 py-1 rounded bg-gray-800 text-white">Commitments</Link>
-          </nav>
-        </div>
-      </header>
+      <DashboardHeader orgId={orgId} />
 
       <main className="max-w-7xl mx-auto px-6 py-8 space-y-6">
         <div className="flex items-center justify-between">

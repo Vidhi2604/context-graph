@@ -2,6 +2,7 @@ FROM node:20-alpine
 RUN apk add --no-cache libc6-compat openssl
 WORKDIR /app
 
+ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN addgroup --system --gid 1001 nodejs
@@ -10,13 +11,12 @@ RUN adduser --system --uid 1001 nextjs
 # Copy everything
 COPY . .
 
-# Install ALL deps (including devDeps needed for build: tailwindcss, postcss, etc.)
-RUN npm ci --include=dev
+# Install and build
+RUN npm ci
 RUN npx prisma generate
 RUN npm run build
 
-ENV NODE_ENV=production
-
+USER nextjs
 EXPOSE 3000
 ENV PORT=3000 HOSTNAME="0.0.0.0"
 CMD ["node", ".next/standalone/server.js"]

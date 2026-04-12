@@ -18,20 +18,37 @@ interface OrgSwitcherProps {
 export default function OrgSwitcher({ currentOrgId, currentVertical }: OrgSwitcherProps) {
   const [orgs, setOrgs] = useState<OrgOption[]>([]);
   const [open, setOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const router = useRouter();
+
+  useEffect(() => { setMounted(true); }, []);
 
   useEffect(() => {
     const userId = typeof window !== "undefined" ? localStorage.getItem("userId") : null;
     if (!userId) {
-      // No userId — still show current org as a single option using orgId
       if (currentOrgId) {
-        setOrgs([{
-          id: currentOrgId,
-          name: "My Organization",
-          vertical: currentVertical,
-          plan: typeof window !== "undefined" ? localStorage.getItem("plan") || "enterprise" : "enterprise",
-        }]);
+        const savedName = typeof window !== "undefined" ? localStorage.getItem("orgName") : null;
+        // Try fetching org name from API
+        fetch(`/api/org?userId=_&orgId=${currentOrgId}`)
+          .then((r) => r.ok ? r.json() : null)
+          .then((data) => {
+            const name = data?.orgs?.[0]?.name || savedName || "My Organization";
+            setOrgs([{
+              id: currentOrgId,
+              name,
+              vertical: currentVertical,
+              plan: typeof window !== "undefined" ? localStorage.getItem("plan") || "enterprise" : "enterprise",
+            }]);
+          })
+          .catch(() => {
+            setOrgs([{
+              id: currentOrgId,
+              name: savedName || "My Organization",
+              vertical: currentVertical,
+              plan: typeof window !== "undefined" ? localStorage.getItem("plan") || "enterprise" : "enterprise",
+            }]);
+          });
       }
       return;
     }
@@ -51,6 +68,8 @@ export default function OrgSwitcher({ currentOrgId, currentVertical }: OrgSwitch
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  if (!mounted) return <div className="w-32 h-8 bg-gray-800 rounded-lg animate-pulse" />;
 
   const currentOrg = orgs.find((o) => o.id === currentOrgId);
   const icon = currentVertical === "retail" ? "🏪" : "🏥";

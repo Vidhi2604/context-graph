@@ -8,8 +8,7 @@ const VERTICALS: Record<string, VerticalConfig> = {
 };
 
 export function getVertical(id: string): VerticalConfig {
-  const v = VERTICALS[id];
-  if (!v) throw new Error(`Unknown vertical: ${id}`);
+  const v = VERTICALS[id] || VERTICALS["retail"];
   return v;
 }
 
