@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import type { ActivityEntry, ActivityLayer } from "@/lib/activity-log";
 
 const LAYER_COLOR: Record<ActivityLayer, string> = {
@@ -91,7 +91,33 @@ function buildRows(entries: ActivityEntry[]): ActivityEntry[][] {
 
 export default function ActivityPanel({ orgId, resetKey, onClose }: Props) {
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
+  const [width, setWidth] = useState(460);
+  const isDragging = useRef(false);
+  const startX = useRef(0);
+  const startWidth = useRef(0);
   const sinceRef = useRef<number>(0);
+
+  const onDragStart = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    isDragging.current = true;
+    startX.current = e.clientX;
+    startWidth.current = width;
+    e.preventDefault();
+  }, [width]);
+
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => {
+      if (!isDragging.current) return;
+      const delta = startX.current - e.clientX;
+      setWidth(Math.max(320, Math.min(900, startWidth.current + delta)));
+    };
+    const onMouseUp = () => { isDragging.current = false; };
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+    return () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    };
+  }, []);
 
   useEffect(() => {
     setEntries([]);
@@ -132,22 +158,27 @@ export default function ActivityPanel({ orgId, resetKey, onClose }: Props) {
   const pipelines = groupIntoPipelines(entries);
 
   return (
-    <div className="fixed right-0 top-0 h-full w-[460px] bg-gray-900 border-l border-gray-800 flex flex-col z-40">
+    <div className="fixed right-0 top-0 h-full bg-gray-900 border-l border-gray-800 flex flex-col z-40" style={{ width }}>
+      {/* Resize handle */}
+      <div
+        onMouseDown={onDragStart}
+        className="absolute left-0 top-0 h-full w-1 cursor-col-resize hover:bg-blue-500/40 transition-colors z-50"
+      />
       {/* Header */}
       <div className="px-4 py-3 border-b border-gray-800 flex items-center justify-between shrink-0">
         <div>
           <div className="flex items-center gap-2">
             <span className="text-sm font-semibold text-white">Activity Log</span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-900/40 text-emerald-400 animate-pulse">
+            <span className="text-xs px-1.5 py-0.5 rounded bg-emerald-900/40 text-emerald-400 animate-pulse">
               live
             </span>
           </div>
-          <p className="text-[10px] text-gray-500 mt-0.5">Chronological · branches = parallel steps</p>
+          <p className="text-xs text-gray-500 mt-0.5">Real-time pipeline trace — see exactly what happens on every search or ingest</p>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={() => { setEntries([]); sinceRef.current = 0; }}
-            className="text-[10px] text-gray-600 hover:text-gray-400"
+            className="text-xs text-gray-600 hover:text-gray-400"
           >
             clear
           </button>
@@ -156,13 +187,16 @@ export default function ActivityPanel({ orgId, resetKey, onClose }: Props) {
       </div>
 
       {/* Legend */}
-      <div className="px-4 py-2 border-b border-gray-800 flex flex-wrap gap-x-3 gap-y-1 shrink-0">
-        {(Object.keys(LAYER_COLOR) as ActivityLayer[]).map(layer => (
-          <span key={layer} className="flex items-center gap-1 text-[10px] text-gray-500">
-            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: LAYER_COLOR[layer] }} />
-            {LAYER_LABEL[layer]}
-          </span>
-        ))}
+      <div className="px-4 py-2 border-b border-gray-800 shrink-0">
+        <p className="text-xs text-gray-600 mb-1.5">Color indicates pipeline layer:</p>
+        <div className="flex flex-wrap gap-x-3 gap-y-1">
+          {(Object.keys(LAYER_COLOR) as ActivityLayer[]).map(layer => (
+            <span key={layer} className="flex items-center gap-1 text-xs text-gray-500" title={`${LAYER_LABEL[layer]} layer`}>
+              <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: LAYER_COLOR[layer] }} />
+              {LAYER_LABEL[layer]}
+            </span>
+          ))}
+        </div>
       </div>
 
       {/* Content */}
@@ -171,7 +205,7 @@ export default function ActivityPanel({ orgId, resetKey, onClose }: Props) {
           <div className="flex flex-col items-center justify-center h-full text-gray-600 text-sm gap-2">
             <span className="text-2xl">⬡</span>
             <span>Waiting for activity…</span>
-            <span className="text-[10px]">Run a search or trigger an ingest</span>
+            <span className="text-xs">Run a search or trigger an ingest</span>
           </div>
         ) : (
           pipelines.map(pipeline => (
@@ -191,7 +225,7 @@ function PipelineBlock({ pipeline }: { pipeline: Pipeline }) {
   return (
     <div className="space-y-0.5">
       {/* Timestamp */}
-      <div className="text-[10px] text-gray-600 font-mono mb-1">{time}</div>
+      <div className="text-xs text-gray-600 font-mono mb-1">{time}</div>
 
       {isParallel ? (
         // Branching layout
@@ -210,6 +244,59 @@ function PipelineBlock({ pipeline }: { pipeline: Pipeline }) {
           {rows[0]?.map(entry => <EntryCard key={entry.id} entry={entry} />)}
         </div>
       )}
+    </div>
+  );
+}
+
+// Keys that get a full-width code block treatment
+const CODE_KEYS = new Set(["cypher", "error"]);
+
+function MetadataBlock({ metadata }: { metadata: Record<string, unknown> }) {
+  const codeEntries = Object.entries(metadata).filter(([k]) => CODE_KEYS.has(k));
+  const scalarEntries = Object.entries(metadata).filter(([k, v]) => !CODE_KEYS.has(k) && !Array.isArray(v));
+  const arrayEntries = Object.entries(metadata).filter(([, v]) => Array.isArray(v));
+
+  return (
+    <div className="space-y-1.5 border-t border-gray-800/40 pt-1.5">
+      {/* Scalar key-value pairs in a grid */}
+      {scalarEntries.length > 0 && (
+        <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+          {scalarEntries.map(([k, v]) => (
+            <div key={k} className="flex gap-1.5 items-baseline min-w-0">
+              <span className="text-[11px] text-gray-600 uppercase tracking-wide shrink-0">{k.replace(/_/g, " ")}</span>
+              <span className={`text-xs font-mono truncate ${
+                k === "confidence" ? (Number(v) >= 0.8 ? "text-emerald-400" : Number(v) >= 0.5 ? "text-yellow-400" : "text-red-400")
+                : k === "fallback" ? "text-orange-400"
+                : "text-gray-300"
+              }`}>
+                {typeof v === "boolean" ? (v ? "yes" : "no") : String(v ?? "—")}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Array values as pill lists */}
+      {arrayEntries.map(([k, v]) => (
+        <div key={k} className="flex items-start gap-1.5">
+          <span className="text-[11px] text-gray-600 uppercase tracking-wide shrink-0 mt-0.5">{k.replace(/_/g, " ")}</span>
+          <div className="flex flex-wrap gap-1">
+            {(v as unknown[]).map((item, i) => (
+              <span key={i} className="text-[11px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 font-mono">{String(item)}</span>
+            ))}
+          </div>
+        </div>
+      ))}
+
+      {/* Code blocks (cypher, error) */}
+      {codeEntries.map(([k, v]) => (
+        <div key={k}>
+          <span className="text-[11px] text-gray-600 uppercase tracking-wide">{k}</span>
+          <pre className={`mt-0.5 text-xs font-mono whitespace-pre-wrap break-all rounded p-2 leading-relaxed ${
+            k === "error" ? "bg-red-950/40 text-red-300" : "bg-gray-800/60 text-cyan-300"
+          }`}>{String(v)}</pre>
+        </div>
+      ))}
     </div>
   );
 }
@@ -240,7 +327,7 @@ function EntryCard({ entry }: { entry: ActivityEntry }) {
         </span>
 
         {/* Duration / status */}
-        <span className={`text-[10px] font-mono shrink-0 ${
+        <span className={`text-xs font-mono shrink-0 ${
           entry.status === "error" ? "text-red-400" :
           entry.status === "running" ? "text-yellow-400" :
           entry.duration_ms !== undefined
@@ -252,7 +339,7 @@ function EntryCard({ entry }: { entry: ActivityEntry }) {
           {isRunning ? "…" : entry.duration_ms !== undefined ? `${entry.duration_ms}ms` : "—"}
         </span>
 
-        <span className="text-[10px] shrink-0">
+        <span className="text-xs shrink-0">
           {isRunning ? (
             <span className="text-yellow-400 animate-pulse">⟳</span>
           ) : entry.status === "success" ? (
@@ -267,27 +354,28 @@ function EntryCard({ entry }: { entry: ActivityEntry }) {
 
       {/* Detail row */}
       {entry.detail && !expanded && (
-        <div className="text-[10px] text-gray-500 font-mono truncate mt-0.5 pl-4">{entry.detail}</div>
+        <div className="text-xs text-gray-500 font-mono truncate mt-0.5 pl-4">{entry.detail}</div>
       )}
 
       {expanded && (
-        <div className="mt-2 pl-4 space-y-1 border-t border-gray-800/60 pt-2">
-          <div className="flex gap-2 text-[10px]">
-            <span className="text-gray-600 uppercase tracking-wide w-12 shrink-0">Layer</span>
+        <div className="mt-2 pl-4 space-y-1.5 border-t border-gray-800/60 pt-2">
+          <div className="flex gap-2 text-xs">
+            <span className="text-gray-600 uppercase tracking-wide w-14 shrink-0">Layer</span>
             <span className="text-gray-400">{LAYER_LABEL[entry.layer]}</span>
           </div>
           {entry.detail && (
-            <div className="flex gap-2 text-[10px]">
-              <span className="text-gray-600 uppercase tracking-wide w-12 shrink-0">Detail</span>
+            <div className="flex gap-2 text-xs">
+              <span className="text-gray-600 uppercase tracking-wide w-14 shrink-0">Detail</span>
               <span className="text-gray-400 font-mono break-all">{entry.detail}</span>
             </div>
           )}
           {entry.duration_ms !== undefined && (
-            <div className="flex gap-2 text-[10px]">
-              <span className="text-gray-600 uppercase tracking-wide w-12 shrink-0">Time</span>
+            <div className="flex gap-2 text-xs">
+              <span className="text-gray-600 uppercase tracking-wide w-14 shrink-0">Time</span>
               <span className="text-gray-400 font-mono">{entry.duration_ms}ms</span>
             </div>
           )}
+          {entry.metadata && <MetadataBlock metadata={entry.metadata} />}
         </div>
       )}
     </button>

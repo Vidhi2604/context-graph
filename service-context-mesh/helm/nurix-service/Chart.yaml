@@ -1,6 +1,1 @@
-apiVersion: v2
-name: nurix-service
-description: ContextMesh — Decision Intelligence Layer
-type: application
-version: 0.1.0
-appVersion: "1.0.0"
+404: Not Found

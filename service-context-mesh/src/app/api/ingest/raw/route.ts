@@ -1,10 +1,10 @@
-export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
-import { getOrgFromApiKey, errorResponse } from "@/lib/api-auth";
+import { getOrgFromRequest, errorResponse } from "@/lib/api-auth";
 import { getConfig } from "@/lib/ingest-configs";
 import { mapRawPayload } from "@/lib/raw-mapper";
-import { produceToStream } from "@/lib/streams";
+import { produceToStream, isStreamsConfigured } from "@/lib/streams";
 import { TraceCollector } from "@/lib/trace";
+import { logActivity, completeActivity } from "@/lib/activity-log";
 
 /**
  * POST /api/ingest/raw
@@ -28,10 +28,10 @@ export async function POST(req: NextRequest) {
 
     // Auth via API key
     const session = await (trace
-      ? trace.run("Auth & Tenant Resolution", "getOrgFromApiKey()", "auth",
+      ? trace.run("Auth & Tenant Resolution", "getOrgFromRequest()", "auth",
           "API key in Authorization header",
-          () => getOrgFromApiKey(req))
-      : getOrgFromApiKey(req));
+          () => getOrgFromRequest(req))
+      : getOrgFromRequest(req));
 
     // Get client config
     const clientKey = req.nextUrl.searchParams.get("client") || undefined;
@@ -54,6 +54,11 @@ export async function POST(req: NextRequest) {
     }
 
     // Map all payloads
+    const mapActId = logActivity(session.tenantId, {
+      layer: "mapping", label: "Field Mapping",
+      detail: `${payloads.length} payload(s) · client: ${clientKey || "default"}`,
+      status: "running", started_at: Date.now(),
+    });
     const mapped = await (trace
       ? trace.run("Field Mapping", "mapRawPayload()", "mapping",
           `${payloads.length} payload(s), client: ${clientKey || "default"}`,
@@ -64,6 +69,17 @@ export async function POST(req: NextRequest) {
       : Promise.resolve(payloads.map(p => mapRawPayload(p, config, clientKey || "raw"))));
 
     const validEvents = mapped.filter(Boolean);
+    const firstEvent = validEvents[0] as unknown as Record<string, unknown> | undefined;
+    const identifiers = (firstEvent?.identifiers || {}) as Record<string, string>;
+    completeActivity(session.tenantId, mapActId, validEvents.length > 0 ? "success" : "error",
+      `${validEvents.length}/${payloads.length} mapped · identifiers: ${Object.keys(identifiers).join(", ") || "none"}`, {
+      total: payloads.length,
+      mapped: validEvents.length,
+      skipped: payloads.length - validEvents.length,
+      client_config: clientKey || "default",
+      sample_event_type: firstEvent?.event_type || null,
+      sample_identifiers: Object.keys(identifiers),
+    });
     const skipped = payloads.length - validEvents.length;
 
     if (validEvents.length === 0) {
@@ -74,8 +90,7 @@ export async function POST(req: NextRequest) {
       }, { status: 422 });
     }
 
-    // Force sync for raw ingest — stream consumer unreliable in dev
-    const streamsConfigured = false;
+    const streamsConfigured = isStreamsConfigured();
 
     let ingested = 0;
     let failed = 0;
@@ -127,10 +142,14 @@ export async function POST(req: NextRequest) {
             const baseUrl = `${req.nextUrl.protocol}//${req.nextUrl.host}`;
             for (const event of validEvents) {
               try {
-                await fetch(`${baseUrl}/api/events`, {
+                await fetch(`${baseUrl}/api/events/process`, {
                   method: "POST",
-                  headers: { "Content-Type": "application/json", "Authorization": req.headers.get("Authorization")! },
-                  body: JSON.stringify({ ...event, _vertical: session.vertical }),
+                  headers: {
+                    "Content-Type": "application/json",
+                    "x-org-id": session.orgId,
+                    "x-cron-secret": process.env.CRON_SECRET || "dev",
+                  },
+                  body: JSON.stringify({ events: [{ ...event, _vertical: session.vertical }], tenantId: session.tenantId }),
                 });
                 ingested++;
               } catch { failed++; }

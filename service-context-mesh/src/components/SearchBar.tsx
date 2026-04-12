@@ -1,17 +1,26 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 interface SearchBarProps {
   onSearch: (query: string) => void;
   loading: boolean;
-  sampleQueries: string[];
   cypherInfo?: { cypher: string; confidence: number; interpretation: string } | null;
+  orgId?: string;
 }
 
-export default function SearchBar({ onSearch, loading, sampleQueries, cypherInfo }: SearchBarProps) {
+export default function SearchBar({ onSearch, loading, cypherInfo, orgId }: SearchBarProps) {
   const [query, setQuery] = useState("");
   const [showCypher, setShowCypher] = useState(false);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!orgId) return;
+    fetch("/api/search/suggestions", { headers: { "x-org-id": orgId } })
+      .then(r => r.json())
+      .then(d => { if (d.suggestions?.length) setSuggestions(d.suggestions); })
+      .catch(() => {});
+  }, [orgId]);
 
   const handleSubmit = () => {
     if (query.trim()) onSearch(query.trim());
@@ -40,19 +49,20 @@ export default function SearchBar({ onSearch, loading, sampleQueries, cypherInfo
         </button>
       </div>
 
-      {/* Sample queries */}
-      <div className="flex items-center gap-2 text-xs text-gray-500">
-        <span>Try:</span>
-        {sampleQueries.slice(0, 3).map((sq) => (
-          <button
-            key={sq}
-            onClick={() => { setQuery(sq); onSearch(sq); }}
-            className="text-gray-400 hover:text-emerald-400 transition-colors"
-          >
-            {sq}
-          </button>
-        ))}
-      </div>
+      {/* Dynamic suggestions */}
+      {suggestions.length > 0 && !query && (
+        <div className="flex flex-wrap gap-2">
+          {suggestions.map((s, i) => (
+            <button
+              key={i}
+              onClick={() => { setQuery(s); onSearch(s); }}
+              className="text-xs px-3 py-1.5 bg-gray-900 border border-gray-800 rounded-full text-gray-400 hover:border-emerald-600 hover:text-emerald-400 transition-colors"
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Cypher info */}
       {cypherInfo && (

@@ -1,6 +1,4 @@
-export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
-import { RetailEventSchema, HealthcareEventSchema } from "@/types/event";
 import { getOrgFromRequest, errorResponse } from "@/lib/api-auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { isStreamsConfigured, produceToStream } from "@/lib/streams";
@@ -13,21 +11,11 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
 
-    const schema = session.vertical === "retail" ? RetailEventSchema : HealthcareEventSchema;
-    const parsed = schema.safeParse(body);
-
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: "Invalid event", details: parsed.error.flatten() },
-        { status: 400 }
-      );
-    }
-
-    const eventPayload = { ...parsed.data, _vertical: session.vertical };
+    // No schema validation — accept any event format, process directly
+    const eventPayload = { ...body, _vertical: session.vertical };
 
     const syncMode = req.nextUrl.searchParams.get("sync") === "true";
 
-    // 1. Try Redis Streams (primary async pipeline)
     if (!syncMode && isStreamsConfigured()) {
       const messageId = await produceToStream(session.tenantId, eventPayload);
       return NextResponse.json({
@@ -38,7 +26,6 @@ export async function POST(req: NextRequest) {
       }, { status: 202 });
     }
 
-    // 2. Sync fallback — process directly
     const baseUrl = `${req.nextUrl.protocol}//${req.nextUrl.host}`;
     await fetch(`${baseUrl}/api/events/process`, {
       method: "POST",

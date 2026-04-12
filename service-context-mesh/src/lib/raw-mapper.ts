@@ -134,6 +134,9 @@ export interface MappedEvent {
   product?: Record<string, unknown>;
   provider?: Record<string, unknown>;
   diagnosis?: Record<string, unknown>;
+  policy?: Record<string, unknown>;
+  agent?: Record<string, unknown>;
+  payment?: Record<string, unknown>;
 }
 
 export function mapRawPayload(
@@ -270,5 +273,9 @@ export function mapRawPayload(
     product,
     provider,
     diagnosis,
+    policy: (payload.policy || payload.protocol) as Record<string, unknown> | undefined,
+    agent: payload.agent as Record<string, unknown> | undefined,
+    payment: (payload.payment as Record<string, unknown>) ||
+      (payload.payment_method ? { method: payload.payment_method } : undefined),
   };
 }

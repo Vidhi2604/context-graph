@@ -1,4 +1,3 @@
-export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { getOrgFromRequest, errorResponse } from "@/lib/api-auth";
 import { runQuery } from "@/lib/neo4j";
@@ -31,16 +30,16 @@ export async function GET(req: NextRequest) {
       customer_name: string;
     }>(
       `MATCH (c:Commitment {_tenant: $t})
-       OPTIONAL MATCH (p:Profile {_tenant: $t})-[:MADE_COMMITMENT]->(c)
+       OPTIONAL MATCH (p:Profile {_tenant: $t})-[:HAS_COMMITMENT]->(c)
        WHERE 1=1 ${whereClause}
        RETURN
-         c.id AS id,
+         c.commitment_id AS id,
          c.promise_text AS promise,
          c.deadline AS deadline,
          c.status AS status,
          c.assignee AS assignee,
          c.confidence_score AS confidence,
-         p.id AS profile_id,
+         p.profile_id AS profile_id,
          p.name AS customer_name
        ORDER BY
          CASE c.status WHEN 'breached' THEN 0 WHEN 'open' THEN 1 ELSE 2 END,

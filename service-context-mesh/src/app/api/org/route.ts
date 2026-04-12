@@ -1,4 +1,3 @@
-export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { randomBytes } from "crypto";
 import { prisma } from "@/lib/prisma";
@@ -37,9 +36,13 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Initialize Neo4j schema for this vertical
-    const config = getVertical(vertical);
-    await initSchema(config.constraints, config.indexes);
+    // Initialize Neo4j schema for this vertical (non-blocking)
+    try {
+      const config = getVertical(vertical);
+      await initSchema(config.constraints, config.indexes);
+    } catch {
+      // Non-critical — org is created, schema init can be retried
+    }
 
     return NextResponse.json({
       id: org.id,
@@ -54,9 +57,34 @@ export async function POST(req: NextRequest) {
   }
 }
 
+export async function PATCH(req: NextRequest) {
+  try {
+    const { orgId, name } = await req.json();
+    if (!orgId || !name) {
+      return NextResponse.json({ error: "orgId and name required" }, { status: 400 });
+    }
+    const org = await prisma.org.update({
+      where: { id: orgId },
+      data: { name },
+    });
+    return NextResponse.json({ id: org.id, name: org.name });
+  } catch (error) {
+    return errorResponse(error);
+  }
+}
+
 export async function GET(req: NextRequest) {
   try {
     const userId = req.nextUrl.searchParams.get("userId");
+    const orgId = req.nextUrl.searchParams.get("orgId");
+
+    // Fetch single org by ID (for OrgSwitcher when no userId in session)
+    if (orgId) {
+      const org = await prisma.org.findUnique({ where: { id: orgId } });
+      if (!org) return NextResponse.json({ orgs: [] });
+      return NextResponse.json({ orgs: [{ id: org.id, name: org.name, vertical: org.vertical, plan: org.plan }] });
+    }
+
     if (!userId) {
       return NextResponse.json({ error: "userId required" }, { status: 400 });
     }

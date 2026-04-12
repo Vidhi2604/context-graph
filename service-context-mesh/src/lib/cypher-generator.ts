@@ -105,14 +105,23 @@ GRAPH SCHEMA:
 - (:Identity {identity_id, type, value, source, verified, strength, _tenant})
 ${nodeSchemas}
 
+EVENT NODE PROPERTIES (retail):
+- event_type: "purchase" | "return_initiated" | "refund_issued" | "product_view" | "add_to_cart" | "support_ticket" | "review_submitted"
+- method: "COD" | "UPI" | "Credit Card" | "Debit Card"  ← payment method is HERE on Event, NOT on a Payment node
+- amount: number (order value in rupees)
+- channel: "web" | "mobile" | "store"  ← NOT the payment method
+- status: "completed" | "pending" | "failed"
+- exception: boolean
+
 RELATIONSHIPS (${config.id === "retail" ? "Retail" : "Healthcare"}):
 ${config.id === "retail" ? RETAIL_RELS : HEALTHCARE_RELS}
 
 IDENTITY RESOLUTION:
 - When searching by email/phone/device_id/mrn, match via Identity:
   MATCH (i:Identity {value: $searchValue, _tenant: "{tenantId}"})<-[:HAS_IDENTITY]-(p:Profile)
-- When searching by name/tier/city, match on Profile:
-  MATCH (p:Profile {_tenant: "{tenantId}"}) WHERE p.name CONTAINS $searchValue
+- When searching by name/tier/city, match on Profile using case-insensitive toLower():
+  MATCH (p:Profile {_tenant: "{tenantId}"}) WHERE toLower(p.name) CONTAINS toLower($searchValue)
+- ALWAYS use toLower() for any string comparisons (name, city, tier, event_type, etc.) to ensure case-insensitive search
 
 CRITICAL RULES:
 - Every query MUST filter by _tenant = "{tenantId}"

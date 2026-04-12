@@ -93,29 +93,33 @@ export async function consumeFromStream(
 
   // XREAD COUNT count STREAMS key lastId
   // Upstash xread: (key, id, options) OR (keys[], ids[], options)
-  const result = await r.xread([key], [lastId], { count });
+  const result = await r.xread(key, lastId, { count });
 
   if (!result || result.length === 0) return [];
 
   const events: Record<string, unknown>[] = [];
 
-  for (const streamResult of result) {
-    const messages = (streamResult as { messages: { id: string; message: Record<string, string> }[] }).messages;
-    if (!messages) continue;
+  // Upstash xread format: [[key, [[id, ["data", {object}]], ...]]]
+  const streamData = (result as unknown[][])[0];
+  if (!streamData || !Array.isArray(streamData[1])) return [];
 
-    for (const msg of messages) {
-      try {
-        const data = msg.message?.data;
-        if (data) {
-          const parsed = JSON.parse(data) as Record<string, unknown>;
-          events.push({ ...parsed, _stream_id: msg.id });
-          // Track last read ID
-          lastReadIds[tenantId] = msg.id;
-        }
-      } catch {
-        // Skip bad messages
-        if (msg.id) lastReadIds[tenantId] = msg.id;
+  const msgList = streamData[1] as unknown[][];
+  for (const entry of msgList) {
+    try {
+      const msgId = (entry as unknown[])[0] as string;
+      const fields = (entry as unknown[])[1] as unknown[];
+      // fields = ["data", {event object}]
+      const dataIdx = (fields as unknown[]).indexOf("data");
+      const raw = dataIdx !== -1 ? fields[dataIdx + 1] : null;
+      if (raw) {
+        const parsed = typeof raw === "string" ? JSON.parse(raw) as Record<string, unknown> : raw as Record<string, unknown>;
+        events.push({ ...parsed, _stream_id: msgId });
+        lastReadIds[tenantId] = msgId;
+      } else if (msgId) {
+        lastReadIds[tenantId] = msgId;
       }
+    } catch {
+      // skip bad message
     }
   }
 
