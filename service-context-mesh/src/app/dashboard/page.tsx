@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 import { useSession, signOut } from "next-auth/react";
 import SearchBar from "@/components/SearchBar";
 import ContextGraph from "@/components/ContextGraph";
@@ -182,7 +183,7 @@ function ExportButton({ graph, insight, query, orgId }: { graph: GraphResult | n
   );
 }
 
-export default function DashboardPage() {
+function DashboardPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [graph, setGraph] = useState<GraphResult | null>(null);
@@ -598,5 +599,13 @@ export default function DashboardPage() {
         />
       )}
     </div>
+  );
+}
+
+export default function DashboardPage() {
+  return (
+    <Suspense fallback={null}>
+      <DashboardPageInner />
+    </Suspense>
   );
 }
