@@ -76,7 +76,7 @@ function GraphMockup() {
         <span className="w-2.5 h-2.5 rounded-full" style={{ background:"#f87171" }} />
         <span className="w-2.5 h-2.5 rounded-full" style={{ background:"#fbbf24" }} />
         <span className="w-2.5 h-2.5 rounded-full" style={{ background:"#4ade80" }} />
-        <span className="ml-3 text-xs" style={{ color:"#4a6fa5" }}>Context Graph · Search: "customer"</span>
+        <span className="ml-3 text-xs" style={{ color:"#4a6fa5" }}>Context Graph · Search: &quot;customer&quot;</span>
         <span className="ml-auto text-xs px-2 py-0.5 rounded" style={{ background:"rgba(36,90,226,0.15)", color:"#5b8fff" }}>12 nodes · 14 edges</span>
       </div>
       <svg width="100%" height="480" viewBox="-20 40 800 560"

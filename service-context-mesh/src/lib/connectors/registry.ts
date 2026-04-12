@@ -40,7 +40,7 @@ export async function getConnectors(tenantId: string): Promise<ConnectorConfig[]
 }
 
 export async function saveConnector(config: ConnectorConfig): Promise<void> {
-  const { id, type, tenantId, name, active, created_at, ...rest } = config;
+  const { id, type, tenantId, name, active, created_at: _created_at, ...rest } = config;
   const credentials = JSON.stringify(rest.credentials || {});
 
   await prisma.connector.upsert({
