@@ -27,6 +27,7 @@ export function journeyToGraph(journey: Journey): GraphResult {
     label: 'Profile',
     displayName: journey.customer_name || journey.phone_number,
     relevance: 1.0,
+    color: '#10b981',
     properties: {
       phone: journey.phone_number,
       name: journey.customer_name || '',
@@ -45,11 +46,13 @@ export function journeyToGraph(journey: Journey): GraphResult {
     const transferred = event.human_transfer_status === 'COMPLETED' ? ' · Transferred' : ''
     const duration = event.duration ? `${Math.round(event.duration / 60)}m` : ''
 
+    const nodeColor = SENTIMENT_COLOR[event.sentiment] || '#6b7280'
     nodes.push({
       id: nodeId,
       label: 'Event',
       displayName: `${direction} · ${event.agent_name}${transferred}`,
       relevance: 0.8,
+      color: nodeColor,
       properties: {
         event_type: event.intent,
         timestamp: event.timestamp,
@@ -71,7 +74,7 @@ export function journeyToGraph(journey: Journey): GraphResult {
       id: `e_profile_${i}`,
       source: profileId,
       target: nodeId,
-      label: 'HAD_CALL',
+      type: 'HAD_CALL',
       properties: {},
     })
 
@@ -81,22 +84,33 @@ export function journeyToGraph(journey: Journey): GraphResult {
         id: `e_chain_${i}`,
         source: `call_${journey.events[i - 1].id}`,
         target: nodeId,
-        label: 'NEXT',
+        type: 'NEXT',
         properties: {},
       })
     }
   })
 
-  // Build timeline
-  const timeline = journey.events.map((e: ConversationEvent) => ({
-    date: e.timestamp.slice(0, 10),
-    events: [{
+  // Build timeline grouped by date
+  const timelineMap: Record<string, GraphNode[]> = {}
+  journey.events.forEach((e: ConversationEvent) => {
+    const date = e.timestamp.slice(0, 10)
+    if (!timelineMap[date]) timelineMap[date] = []
+    timelineMap[date].push({
       id: `call_${e.id}`,
       label: 'Event',
       displayName: `${e.direction?.toLowerCase() === 'outbound' ? 'OB' : 'IB'} · ${e.agent_name}`,
       relevance: 0.8,
+      color: SENTIMENT_COLOR[e.sentiment] || '#6b7280',
       properties: e as unknown as Record<string, unknown>,
-    }],
+    })
+  })
+
+  const timeline = Object.entries(timelineMap).map(([date, evts]) => ({
+    date,
+    events: evts,
+    count: evts.length,
+    totalAmount: 0,
+    topEventType: 'support_call',
   }))
 
   return {
@@ -107,8 +121,7 @@ export function journeyToGraph(journey: Journey): GraphResult {
     summary: {
       total_nodes: nodes.length,
       total_edges: edges.length,
-      profile_count: 1,
-      event_count: journey.events.length,
+      node_breakdown: { Profile: 1, Event: journey.events.length },
     },
   }
 }
