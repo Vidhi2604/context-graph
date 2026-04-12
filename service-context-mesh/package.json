@@ -3,10 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
+    "dev": "cp prisma/schema.dev.prisma prisma/schema.prisma && npx prisma generate && next dev",
+    "build": "cp prisma/schema.prod.prisma prisma/schema.prisma && npx prisma generate && npx prisma db push --skip-generate && next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "db:dev": "cp prisma/schema.dev.prisma prisma/schema.prisma && npx prisma generate && DATABASE_URL='file:./prisma/dev.db' npx prisma db push",
+    "db:prod": "cp prisma/schema.prod.prisma prisma/schema.prisma && npx prisma generate"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.87.0",

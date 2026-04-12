@@ -99,7 +99,7 @@ export async function POST(req: NextRequest) {
     }
 
     const config = getConfig(undefined);
-    const mapped = rows.map(r => mapRawPayload(r, config, "csv")).filter(Boolean);
+    const mapped = rows.map(r => mapRawPayload(r, config, "csv")).filter(Boolean).map(e => ({ ...e, _ingest_source: "csv_import" }));
 
     if (mapped.length === 0) {
       return NextResponse.json({
@@ -109,30 +109,33 @@ export async function POST(req: NextRequest) {
       }, { status: 422 });
     }
 
-    // Process events
+    // Process all events in a single batch call
     const baseUrl = `${req.nextUrl.protocol}//${req.nextUrl.host}`;
     let ingested = 0;
     let failed = 0;
 
-    for (const event of mapped) {
-      try {
-        const res = await fetch(`${baseUrl}/api/events/process`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-org-id": session.orgId,
-            "x-cron-secret": process.env.CRON_SECRET || "dev",
-          },
-          body: JSON.stringify({
-            events: [{ ...event, _vertical: session.vertical }],
-            tenantId: session.tenantId,
-          }),
-        });
-        if (res.ok) ingested++;
-        else failed++;
-      } catch {
-        failed++;
+    try {
+      const res = await fetch(`${baseUrl}/api/events/process`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-org-id": session.orgId,
+          "x-cron-secret": process.env.CRON_SECRET || "dev",
+        },
+        body: JSON.stringify({
+          events: mapped.map(e => ({ ...e, _vertical: session.vertical })),
+          tenantId: session.tenantId,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        ingested = data.processed ?? mapped.length;
+        failed = data.failed ?? 0;
+      } else {
+        failed = mapped.length;
       }
+    } catch {
+      failed = mapped.length;
     }
 
     return NextResponse.json({

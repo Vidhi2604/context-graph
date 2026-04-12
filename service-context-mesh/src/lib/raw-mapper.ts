@@ -57,10 +57,10 @@ function extractIdentifiers(payload: Record<string, unknown>, config: IngestConf
   const identifiers: Record<string, string> = {};
   const fieldsToTry = [...(config.identifier_fields || []), ...IDENTIFIER_ALIASES];
 
+  // First pass: check known alias fields
   for (const field of fieldsToTry) {
     const val = payload[field];
     if (val && typeof val === "string" && val.length > 0) {
-      // Map to known identifier types
       const isPhone = ["phone","mobile","mob","contact","whatsapp","cell","ph"].some(k => field.includes(k))
         || /^[\d\s\-\+\(\)]{8,15}$/.test(val.replace(/[^\d]/g, "").length >= 8 ? val : "");
       if (field.includes("email") || val.includes("@")) {
@@ -73,6 +73,28 @@ function extractIdentifiers(payload: Record<string, unknown>, config: IngestConf
         identifiers.aadhaar = val;
       } else {
         identifiers[field.includes("user") ? "user_id" : "crm_id"] = val;
+      }
+    }
+  }
+
+  // Second pass: scan ALL payload keys for email/phone patterns (handles customer_email, buyer_phone, etc.)
+  if (Object.keys(identifiers).length === 0) {
+    for (const [field, val] of Object.entries(payload)) {
+      if (!val || typeof val !== "string") continue;
+      if (field.includes("email") || val.includes("@")) {
+        identifiers.email = val; break;
+      }
+    }
+    for (const [field, val] of Object.entries(payload)) {
+      if (!val || typeof val !== "string") continue;
+      if (["phone","mobile","mob","cell","contact","whatsapp"].some(k => field.toLowerCase().includes(k))) {
+        identifiers.phone = val; break;
+      }
+    }
+    for (const [field, val] of Object.entries(payload)) {
+      if (!val || typeof val !== "string") continue;
+      if (field.toLowerCase().includes("user_id") || field.toLowerCase().includes("customer_id") || field.toLowerCase().includes("uid")) {
+        identifiers.user_id = val; break;
       }
     }
   }

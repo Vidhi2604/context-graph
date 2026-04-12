@@ -6,6 +6,8 @@ import type { InsightResponse } from "@/types/graph";
 import { TraceCollector } from "@/lib/trace";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { logActivity, completeActivity } from "@/lib/activity-log";
+import { prisma } from "@/lib/prisma";
+import { evaluateCondition } from "@/lib/webhook-condition";
 
 export async function POST(req: NextRequest) {
   try {
@@ -100,6 +102,38 @@ Rules:
     }
     completeActivity(session.tenantId, insightActId, "success", `confidence: ${(finalRaw.result as Record<string,unknown>)?.confidence ?? "?"}`);
 
+    // Auto-fire webhooks whose condition matches the insight result
+    try {
+      const insightResult = (finalRaw as unknown as InsightResponse).result;
+      if (insightResult) {
+        const webhooks = await prisma.$queryRawUnsafe(
+          `SELECT id, name, url, condition FROM Webhook WHERE orgId = ? AND enabled = 1`,
+          session.orgId
+        ) as { id: string; name: string; url: string; condition: string }[];
+        for (const wh of webhooks) {
+          if (evaluateCondition(wh.condition, insightResult)) {
+            fetch(`${req.nextUrl.origin}/api/webhooks/fire`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "x-org-id": session.orgId },
+              body: JSON.stringify({
+                url: wh.url,
+                payload: {
+                  source: "contextmesh",
+                  event: "insight_generated",
+                  timestamp: new Date().toISOString(),
+                  org_id: session.orgId,
+                  webhook_name: wh.name,
+                  condition: wh.condition,
+                  insight: insightResult,
+                },
+              }),
+            }).catch(err => console.warn("[webhooks] fire failed:", wh.id, err));
+          }
+        }
+      }
+    } catch (whErr) {
+      console.warn("[webhooks] auto-fire error:", whErr);
+    }
 
     const result = raw as unknown as InsightResponse;
 

@@ -60,7 +60,16 @@ const CONNECTORS = [
 export default function ImportPage() {
   const { data: session } = useSession({ required: true });
   const router = useRouter();
-  const orgId = (session as { orgId?: string })?.orgId || "";
+  const [lsOrgId, setLsOrgId] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  useEffect(() => {
+    setLsOrgId(localStorage.getItem("orgId") || "");
+    setApiKey(localStorage.getItem("apiKey") || "");
+  }, []);
+  const orgId = lsOrgId || (session as { orgId?: string })?.orgId || "";
+  const authHeaders: Record<string, string> = apiKey
+    ? { "Authorization": `Bearer ${apiKey}` }
+    : { "x-org-id": orgId };
 
   // Connector state
   const [connectedMap, setConnectedMap] = useState<Record<string, string>>({});
@@ -81,7 +90,7 @@ export default function ImportPage() {
   // Load existing connectors
   useEffect(() => {
     if (!orgId) return;
-    fetch("/api/connectors", { headers: { "x-org-id": orgId } })
+    fetch("/api/connectors", { headers: { ...authHeaders } })
       .then(r => r.json())
       .then(d => {
         const map: Record<string, string> = {};
@@ -97,7 +106,7 @@ export default function ImportPage() {
     try {
       const res = await fetch("/api/connectors", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-org-id": orgId },
+        headers: { "Content-Type": "application/json", ...authHeaders },
         body: JSON.stringify({ type: connId, name: connId, credentials: connCreds[connId] || {} }),
       });
       const data = await res.json();
@@ -123,7 +132,7 @@ export default function ImportPage() {
       const body = dbConnId ? { connector_id: dbConnId } : { type: connId };
       const res = await fetch("/api/connectors/sync", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-org-id": orgId },
+        headers: { "Content-Type": "application/json", ...authHeaders },
         body: JSON.stringify(body),
       });
       const data = await res.json();
@@ -149,27 +158,27 @@ export default function ImportPage() {
       if (tab === "json") {
         let payload: unknown;
         try { payload = JSON.parse(text); } catch { setImportError("Invalid JSON"); setImportLoading(false); return; }
-        res = await fetch("/api/ingest/raw", {
+        res = await fetch("/api/ingest/raw?sync=true&client=json_import", {
           method: "POST",
-          headers: { "Content-Type": "application/json", "x-org-id": orgId },
+          headers: { "Content-Type": "application/json", ...authHeaders },
           body: JSON.stringify(Array.isArray(payload) ? payload : [payload]),
         });
       } else if (tab === "csv") {
         if (file) {
           const form = new FormData();
           form.append("file", file);
-          res = await fetch("/api/ingest/csv", { method: "POST", headers: { "x-org-id": orgId }, body: form });
+          res = await fetch("/api/ingest/csv", { method: "POST", headers: { ...authHeaders }, body: form });
         } else {
           res = await fetch("/api/ingest/csv", {
             method: "POST",
-            headers: { "Content-Type": "application/json", "x-org-id": orgId },
+            headers: { "Content-Type": "application/json", ...authHeaders },
             body: JSON.stringify({ csv_text: text }),
           });
         }
       } else {
         res = await fetch("/api/ingest/csv", {
           method: "POST",
-          headers: { "Content-Type": "application/json", "x-org-id": orgId },
+          headers: { "Content-Type": "application/json", ...authHeaders },
           body: JSON.stringify({ sheet_url: sheetUrl }),
         });
       }
@@ -183,45 +192,47 @@ export default function ImportPage() {
   const canImport = tab === "sheets" ? !!sheetUrl : (!!text.trim() || !!file);
 
   return (
-    <div className="min-h-screen bg-gray-950 text-white">
-      <div className="border-b border-gray-800 px-8 py-4 flex items-center gap-3">
-        <button onClick={() => router.push("/dashboard")} className="text-gray-500 hover:text-white text-sm transition-colors">← Dashboard</button>
-        <span className="text-gray-700">/</span>
-        <h1 className="text-sm font-semibold">Import Data</h1>
+    <div className="min-h-screen" style={{ background: "var(--bg-base)", color: "var(--text-primary)" }}>
+      <div className="px-8 py-4 flex items-center gap-3" style={{ borderBottom: "1px solid var(--border)", background: "var(--bg-surface)" }}>
+        <button onClick={() => router.push("/dashboard")} className="text-sm transition-colors hover:opacity-70" style={{ color: "var(--text-muted)" }}>← Dashboard</button>
+        <span style={{ color: "var(--border-strong)" }}>/</span>
+        <h1 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Import Data</h1>
       </div>
 
       <div className="max-w-5xl mx-auto px-8 py-10 space-y-12">
         <div>
-          <h2 className="text-2xl font-bold">Get your data in</h2>
-          <p className="text-gray-500 mt-1 text-sm">Connect a CRM, upload a file, or paste data directly. We handle the mapping.</p>
+          <h2 className="text-2xl font-bold" style={{ color: "var(--text-primary)" }}>Get your data in</h2>
+          <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>Connect a CRM, upload a file, or paste data directly. We handle the mapping.</p>
         </div>
 
         {/* ── Section 1: CRM Connectors ── */}
         <div className="space-y-4">
           <div className="flex items-center gap-3">
-            <h3 className="text-base font-semibold">Connect a source</h3>
-            <span className="text-xs text-gray-600">Pull data automatically via API</span>
+            <h3 className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>Connect a source</h3>
+            <span className="text-xs" style={{ color: "var(--text-muted)" }}>Pull data automatically via API</span>
           </div>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {CONNECTORS.map(c => {
               const isConnected = !!connectedMap[c.id];
               const isExpanded = expandedConnector === c.id;
               const isLoading = connLoading === c.id;
               return (
-                <div key={c.id} className={`border rounded-xl p-4 transition-all ${isConnected ? "border-emerald-700 bg-emerald-900/10" : "border-gray-800 bg-gray-900"}`}>
+                <div key={c.id} className="rounded-xl p-4 transition-all theme-card"
+                  style={isConnected ? { borderColor: "#10b981", background: "rgba(16,185,129,0.05)" } : {}}>
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
                       {c.logo ? (
                         <Image src={c.logo} alt={c.name} width={24} height={24} className="object-contain" />
                       ) : (
-                        <div className="w-6 h-6 rounded bg-gray-700 flex items-center justify-center text-xs font-bold text-white">{c.name[0]}</div>
+                        <div className="w-6 h-6 rounded flex items-center justify-center text-xs font-bold text-white bg-emerald-600">{c.name[0]}</div>
                       )}
                       <div>
-                        <div className="text-sm font-medium">{c.name}</div>
-                        <div className="text-[10px] text-gray-500">{c.desc}</div>
+                        <div className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{c.name}</div>
+                        <div className="text-[10px]" style={{ color: "var(--text-muted)" }}>{c.desc}</div>
                       </div>
                     </div>
-                    <span className={`text-[9px] px-1.5 py-0.5 rounded ${isConnected ? "bg-emerald-900/50 text-emerald-400" : "bg-gray-800 text-gray-500"}`}>
+                    <span className={`text-[9px] px-1.5 py-0.5 rounded ${isConnected ? "bg-emerald-900/50 text-emerald-400" : ""}`}
+                      style={!isConnected ? { background: "var(--bg-surface-2)", color: "var(--text-muted)" } : {}}>
                       {isConnected ? "Connected" : "Not connected"}
                     </span>
                   </div>
@@ -238,7 +249,7 @@ export default function ImportPage() {
                         <input key={f.key} type={f.type} placeholder={f.label}
                           value={connCreds[c.id]?.[f.key] || ""}
                           onChange={e => setConnCreds(p => ({ ...p, [c.id]: { ...p[c.id], [f.key]: e.target.value } }))}
-                          className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-emerald-500"
+                          className="w-full rounded-lg px-3 py-2 text-xs focus:outline-none theme-input"
                         />
                       ))}
                     </div>
@@ -247,22 +258,26 @@ export default function ImportPage() {
                   <div className="flex gap-2 mt-2">
                     {!isConnected && !isExpanded && (
                       <button onClick={() => setExpandedConnector(c.id)}
-                        className="flex-1 text-xs bg-gray-700 hover:bg-gray-600 py-1.5 rounded-lg transition-colors">
+                        className="flex-1 text-xs py-1.5 rounded-lg transition-colors"
+                        style={{ background: "var(--bg-surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}>
                         Connect
                       </button>
                     )}
                     {isExpanded && (
                       <>
                         <button onClick={() => handleConnect(c.id)} disabled={isLoading}
-                          className="flex-1 text-xs bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 py-1.5 rounded-lg transition-colors">
+                          className="flex-1 text-xs bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 py-1.5 rounded-lg transition-colors text-white">
                           {isLoading ? "Connecting..." : "Save"}
                         </button>
-                        <button onClick={() => setExpandedConnector(null)} className="text-xs text-gray-500 px-2 py-1.5 rounded-lg hover:bg-gray-700">Cancel</button>
+                        <button onClick={() => setExpandedConnector(null)}
+                          className="text-xs px-2 py-1.5 rounded-lg transition-colors"
+                          style={{ color: "var(--text-muted)" }}>Cancel</button>
                       </>
                     )}
                     {isConnected && (
                       <button onClick={() => handleSync(c.id)} disabled={isLoading}
-                        className="flex-1 text-xs bg-gray-700 hover:bg-gray-600 disabled:opacity-50 py-1.5 rounded-lg transition-colors">
+                        className="flex-1 text-xs py-1.5 rounded-lg transition-colors"
+                        style={{ background: "var(--bg-surface-2)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}>
                         {isLoading ? "Syncing..." : "Sync Now"}
                       </button>
                     )}
@@ -275,44 +290,51 @@ export default function ImportPage() {
 
         {/* Divider */}
         <div className="flex items-center gap-4">
-          <div className="flex-1 h-px bg-gray-800" />
-          <span className="text-xs text-gray-600 font-medium">OR UPLOAD / PASTE DATA</span>
-          <div className="flex-1 h-px bg-gray-800" />
+          <div className="flex-1 h-px" style={{ background: "var(--border)" }} />
+          <span className="text-xs font-medium uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>or upload / paste data</span>
+          <div className="flex-1 h-px" style={{ background: "var(--border)" }} />
         </div>
 
         {/* ── Section 2: File / Manual Import ── */}
         <div className="space-y-4">
           <div className="flex items-center gap-3">
-            <h3 className="text-base font-semibold">Upload or paste data</h3>
-            <span className="text-xs text-gray-600">CSV, JSON, or Google Sheets</span>
+            <h3 className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>Upload or paste data</h3>
+            <span className="text-xs" style={{ color: "var(--text-muted)" }}>CSV, JSON, or Google Sheets</span>
           </div>
 
-          <div className="flex gap-1 bg-gray-900 border border-gray-800 rounded-xl p-1 w-fit">
+          <div className="flex gap-1 rounded-xl p-1 w-fit theme-card">
             {([["csv", "CSV"], ["json", "JSON"], ["sheets", "Google Sheets"]] as [Tab, string][]).map(([id, label]) => (
               <button key={id} onClick={() => { setTab(id); setText(""); setFile(null); setSheetUrl(""); setImportError(""); setImportStatus(null); }}
-                className={`px-4 py-2 text-sm rounded-lg transition-colors font-medium ${tab === id ? "bg-gray-800 text-white" : "text-gray-500 hover:text-gray-300"}`}>
+                className="px-4 py-2 text-sm rounded-lg transition-colors font-medium"
+                style={tab === id
+                  ? { background: "var(--bg-surface-2)", color: "var(--text-primary)" }
+                  : { color: "var(--text-muted)" }}>
                 {label}
               </button>
             ))}
           </div>
 
-          <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 space-y-4">
+          <div className="rounded-2xl p-6 space-y-4 theme-card">
             {tab === "csv" && (
               <>
-                <label className="block border-2 border-dashed border-gray-700 rounded-xl p-6 text-center cursor-pointer hover:border-emerald-600 transition-colors">
+                <label className="block rounded-xl p-6 text-center cursor-pointer transition-colors hover:border-emerald-500"
+                  style={{ border: "2px dashed var(--border-strong)" }}>
                   <input type="file" accept=".csv" className="hidden" onChange={e => { setFile(e.target.files?.[0] || null); setText(""); }} />
                   {file ? (
-                    <div className="text-emerald-400 text-sm font-medium">{file.name} <span className="text-gray-500 text-xs ml-2">({(file.size / 1024).toFixed(1)} KB)</span></div>
+                    <div className="text-emerald-500 text-sm font-medium">{file.name} <span className="text-xs ml-2" style={{ color: "var(--text-muted)" }}>({(file.size / 1024).toFixed(1)} KB)</span></div>
                   ) : (
-                    <div className="space-y-1"><div className="text-gray-400 text-sm">Drop a CSV file or click to upload</div><div className="text-gray-600 text-xs">email, phone, name, event_type, amount...</div></div>
+                    <div className="space-y-1">
+                      <div className="text-sm" style={{ color: "var(--text-secondary)" }}>Drop a CSV file or click to upload</div>
+                      <div className="text-xs" style={{ color: "var(--text-muted)" }}>email, phone, name, event_type, amount...</div>
+                    </div>
                   )}
                 </label>
                 {!file && (
                   <>
-                    <div className="text-xs text-gray-600 text-center">or paste CSV text</div>
+                    <div className="text-xs text-center" style={{ color: "var(--text-muted)" }}>or paste CSV text</div>
                     <textarea value={text} onChange={e => setText(e.target.value)} rows={6}
                       placeholder={"email,name,event,amount\nuser@example.com,Priya,purchase,999"}
-                      className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-sm text-white font-mono placeholder:text-gray-600 focus:outline-none focus:border-emerald-500 resize-none" />
+                      className="w-full rounded-xl px-4 py-3 text-sm font-mono resize-none focus:outline-none theme-input" />
                   </>
                 )}
               </>
@@ -321,61 +343,65 @@ export default function ImportPage() {
             {tab === "json" && (
               <>
                 <div className="flex items-center justify-between">
-                  <label className="text-sm text-gray-400">Paste JSON array or single object</label>
+                  <label className="text-sm" style={{ color: "var(--text-secondary)" }}>Paste JSON array or single object</label>
                   <button onClick={() => setText(JSON.stringify([{ email: "priya@example.com", event: "purchase", amount: 999, product: "Nike Air Max", city: "Mumbai" }], null, 2))}
-                    className="text-xs text-emerald-400 hover:underline">Load example</button>
+                    className="text-xs text-emerald-500 hover:underline">Load example</button>
                 </div>
                 <textarea value={text} onChange={e => setText(e.target.value)} rows={10}
                   placeholder={'[\n  { "email": "user@example.com", "event": "purchase", "amount": 999 }\n]'}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-sm text-white font-mono placeholder:text-gray-600 focus:outline-none focus:border-emerald-500 resize-none" />
+                  className="w-full rounded-xl px-4 py-3 text-sm font-mono resize-none focus:outline-none theme-input" />
               </>
             )}
 
             {tab === "sheets" && (
               <>
-                <label className="text-sm text-gray-400 block">Public Google Sheets URL</label>
+                <label className="text-sm block mb-2" style={{ color: "var(--text-secondary)" }}>Public Google Sheets URL</label>
                 <input type="text" value={sheetUrl} onChange={e => setSheetUrl(e.target.value)}
                   placeholder="https://docs.google.com/spreadsheets/d/..."
-                  className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-emerald-500" />
-                <p className="text-xs text-gray-600">Sheet must be set to <span className="text-gray-400">Anyone with the link → Viewer</span>.</p>
+                  className="w-full rounded-xl px-4 py-3 text-sm focus:outline-none theme-input" />
+                <p className="text-xs mt-2" style={{ color: "var(--text-muted)" }}>Sheet must be set to <span style={{ color: "var(--text-secondary)" }}>Anyone with the link → Viewer</span>.</p>
               </>
             )}
 
-            {importError && <div className="bg-red-950/50 border border-red-800 rounded-lg px-4 py-3 text-red-400 text-sm">{importError}</div>}
+            {importError && (
+              <div className="rounded-lg px-4 py-3 text-red-400 text-sm" style={{ background: "rgba(220,38,38,0.08)", border: "1px solid rgba(220,38,38,0.3)" }}>
+                {importError}
+              </div>
+            )}
 
             {importStatus && (
-              <div className="bg-emerald-950/30 border border-emerald-800 rounded-xl px-5 py-4 space-y-3">
-                <div className="text-emerald-400 font-semibold">Import complete</div>
+              <div className="rounded-xl px-5 py-4 space-y-3" style={{ background: "rgba(16,185,129,0.07)", border: "1px solid rgba(16,185,129,0.3)" }}>
+                <div className="text-emerald-500 font-semibold">Import complete</div>
                 <div className="flex gap-6">
-                  <div><div className="text-xs text-gray-500">Mapped</div><div className="text-white font-bold text-xl">{importStatus.mapped}</div></div>
-                  <div><div className="text-xs text-gray-500">Ingested</div><div className="text-white font-bold text-xl">{importStatus.ingested}</div></div>
-                  <div><div className="text-xs text-gray-500">Skipped</div><div className="text-gray-400 font-bold text-xl">{importStatus.skipped}</div></div>
+                  <div><div className="text-xs" style={{ color: "var(--text-muted)" }}>Mapped</div><div className="font-bold text-xl" style={{ color: "var(--text-primary)" }}>{importStatus.mapped}</div></div>
+                  <div><div className="text-xs" style={{ color: "var(--text-muted)" }}>Ingested</div><div className="font-bold text-xl" style={{ color: "var(--text-primary)" }}>{importStatus.ingested}</div></div>
+                  <div><div className="text-xs" style={{ color: "var(--text-muted)" }}>Skipped</div><div className="font-bold text-xl" style={{ color: "var(--text-muted)" }}>{importStatus.skipped}</div></div>
                 </div>
-                {importStatus.columns && <div className="text-xs text-gray-500">Columns: {importStatus.columns.join(", ")}</div>}
+                {importStatus.columns && <div className="text-xs" style={{ color: "var(--text-muted)" }}>Columns: {importStatus.columns.join(", ")}</div>}
                 <button onClick={() => router.push("/dashboard")}
-                  className="bg-emerald-600 hover:bg-emerald-500 px-5 py-2 rounded-xl text-sm font-semibold transition-colors">
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2 rounded-xl text-sm font-semibold transition-colors">
                   View in Dashboard →
                 </button>
               </div>
             )}
 
             {!importStatus && (
-              <button onClick={handleImport} disabled={importLoading || !canImport || !orgId}
-                className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed py-3 rounded-xl font-semibold transition-colors">
+              <button onClick={handleImport} disabled={importLoading || !canImport || (!orgId && !apiKey)}
+                className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed py-3 rounded-xl font-semibold transition-colors text-white">
                 {importLoading ? "Importing..." : "Import & Build Graph"}
               </button>
             )}
           </div>
 
-          <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-4 space-y-1.5">
-            <div className="text-xs font-semibold text-gray-600 uppercase tracking-wider">What we auto-detect</div>
-            <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-gray-500">
-              <span>• <span className="text-gray-400">email, phone, user_id</span> — identity</span>
-              <span>• <span className="text-gray-400">event, action, type</span> — event type</span>
-              <span>• <span className="text-gray-400">amount, price, value</span> — transaction</span>
-              <span>• <span className="text-gray-400">name, city, tier</span> — profile</span>
-              <span>• <span className="text-gray-400">status, channel</span> — context</span>
-              <span>• <span className="text-gray-400">timestamp, date</span> — timeline</span>
+          <div className="rounded-xl p-4 space-y-1.5 theme-card">
+            <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>What we auto-detect</div>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs" style={{ color: "var(--text-muted)" }}>
+              <span>• <span style={{ color: "var(--text-secondary)" }}>email, phone, user_id</span> — identity</span>
+              <span>• <span style={{ color: "var(--text-secondary)" }}>event, action, type</span> — event type</span>
+              <span>• <span style={{ color: "var(--text-secondary)" }}>amount, price, value</span> — transaction</span>
+              <span>• <span style={{ color: "var(--text-secondary)" }}>name, city, tier</span> — profile</span>
+              <span>• <span style={{ color: "var(--text-secondary)" }}>status, channel</span> — context</span>
+              <span>• <span style={{ color: "var(--text-secondary)" }}>timestamp, date</span> — timeline</span>
             </div>
           </div>
         </div>

@@ -81,7 +81,7 @@ export default function OrgSwitcher({ currentOrgId, currentVertical }: OrgSwitch
       localStorage.setItem("plan", org.plan);
     }
     setOpen(false);
-    router.refresh();
+    window.location.href = "/dashboard";
   };
 
   return (

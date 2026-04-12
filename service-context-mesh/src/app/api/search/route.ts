@@ -14,6 +14,7 @@ import { logActivity, completeActivity } from "@/lib/activity-log";
 import { isPhoneNumber, journeyToGraph } from "@/lib/nurix-graph-mapper";
 import { buildJourneyFromPhone } from "@/lib/enrichment";
 import { getConnectors } from "@/lib/connectors/registry";
+import { triggerLiveSearch } from "@/lib/live-search";
 
 export async function POST(req: NextRequest) {
   try {
@@ -79,6 +80,7 @@ export async function POST(req: NextRequest) {
     // Plan gating
     if (plan.searchType === "basic") {
       trace?.skip("LLM Cypher Generation", "generateCypher()", "llm", "Starter plan — basic search only");
+      triggerLiveSearch(parsed.data.query, session.tenantId, session.orgId, session.vertical).catch(() => {});
       const result = await handleBasicSearch(parsed.data.query, session.tenantId, vertical, trace, Math.floor(Math.min(parsed.data.limit, plan.maxGraphNodes === Infinity ? 200 : plan.maxGraphNodes)));
       if (trace) {
         const traceData = trace.finalize("search", parsed.data.query);
@@ -150,12 +152,13 @@ export async function POST(req: NextRequest) {
     }
 
     // If filters were applied and returned 0 profiles — respect that (don't fall back to unfiltered)
+    const eventTypeFilter = activeFilters["eventType"] || activeFilters["event_type"] || activeFilters["Event Type"] || [];
     const contextRecords = profileIds.length > 0
       ? await (trace
           ? trace.run("Context Expansion", "expandContext()", "neo4j",
               `expanding ${profileIds.length} profiles${filtersApplied ? " (filtered)" : ""}`,
-              () => expandProfileContext(profileIds, session.tenantId, session.vertical))
-          : expandProfileContext(profileIds, session.tenantId, session.vertical))
+              () => expandProfileContext(profileIds, session.tenantId, session.vertical, eventTypeFilter))
+          : expandProfileContext(profileIds, session.tenantId, session.vertical, eventTypeFilter))
       : filtersApplied
         ? [] // filters returned 0 results — show empty graph
         : primaryRecords;
@@ -187,6 +190,10 @@ export async function POST(req: NextRequest) {
 
     // Show Redis Streams state in trace
     if (trace) await addRedisTrace(trace, session.tenantId);
+
+    // Fire live search in background — don't await, never blocks response
+    triggerLiveSearch(parsed.data.query, session.tenantId, session.orgId, session.vertical)
+      .catch(() => {});
 
     const response = {
       query: parsed.data.query,
@@ -264,8 +271,18 @@ async function applyFilters(
 
     // Date range — handled separately
     if (filterId === "dateRange") {
-      if (values[0]) dateFrom = values[0];
-      if (values[1]) dateTo = values[1];
+      const rangeVal = values[0];
+      if (rangeVal) {
+        const days = rangeVal === "7d" ? 7 : rangeVal === "30d" ? 30 : rangeVal === "90d" ? 90 : null;
+        if (days) {
+          const from = new Date();
+          from.setDate(from.getDate() - days);
+          dateFrom = from.toISOString();
+          dateTo = new Date().toISOString();
+        } else {
+          dateFrom = rangeVal; // already ISO
+        }
+      }
       needsEventJoin = true;
       continue;
     }
@@ -387,10 +404,15 @@ function extractProfileIds(records: Record<string, unknown>[]): string[] {
 }
 
 // Expand profiles to their full context graph
-function expandProfileContext(profileIds: string[], tenantId: string, vertical: string) {
+function expandProfileContext(profileIds: string[], tenantId: string, vertical: string, eventTypeFilter?: string[]) {
   const isRetail = vertical !== "healthcare";
   const relType = isRetail ? "PERFORMED" : "HAD_VISIT";
   const eventLabel = isRetail ? "Event" : "Visit";
+  const eventAlias = "e";
+
+  const eventTypeCondition = eventTypeFilter && eventTypeFilter.length > 0
+    ? `WHERE toLower(toString(${eventAlias}.event_type)) IN [${eventTypeFilter.map(v => `'${v.toLowerCase()}'`).join(",")}]`
+    : "";
 
   // Return as paths so graph-mapper can extract nodes + edges with correct IDs
   return runQuery(
@@ -400,6 +422,7 @@ function expandProfileContext(profileIds: string[], tenantId: string, vertical: 
 
     // Profile → Event/Visit paths
     OPTIONAL MATCH path1 = (p)-[:${relType}]->(e:${eventLabel} {_tenant: $tenantId})
+    ${eventTypeCondition}
 
     // Event → Product paths
     OPTIONAL MATCH path2 = (e)-[:INVOLVES]->(prod:Product {_tenant: $tenantId})

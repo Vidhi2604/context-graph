@@ -99,6 +99,76 @@ export const ZendeskAdapter: ConnectorAdapter = {
     return events;
   },
 
+  async liveSearch(query: string, credentials: Record<string, string>): Promise<ContextMeshEvent[]> {
+    const { subdomain, email: adminEmail, api_token } = credentials;
+    if (!subdomain || !adminEmail || !api_token) return [];
+
+    const auth = Buffer.from(`${adminEmail}/token:${api_token}`).toString("base64");
+    const events: ContextMeshEvent[] = [];
+    // email lookup from user results
+    const emailByRequesterId: Record<string, string> = {};
+    const nameByRequesterId: Record<string, string> = {};
+
+    try {
+      const res = await fetch(
+        `https://${subdomain}.zendesk.com/api/v2/search.json?query=${encodeURIComponent(query)}&per_page=10`,
+        { headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/json" } }
+      );
+      if (!res.ok) return [];
+
+      const data = await res.json();
+      const results: Record<string, unknown>[] = data.results || [];
+
+      // First pass — collect user info
+      for (const item of results) {
+        if (item.result_type === "user") {
+          const uid = String(item.id || "");
+          if (uid && item.email) emailByRequesterId[uid] = item.email as string;
+          if (uid && item.name) nameByRequesterId[uid] = item.name as string;
+          // Also emit a contact_updated event for the user
+          if (item.email || item.name) {
+            events.push({
+              event_type: "contact_updated",
+              identifiers: {
+                ...(item.email ? { email: item.email as string } : {}),
+                crm_id: uid,
+              },
+              profile_data: { ...(item.name ? { name: item.name as string } : {}) },
+              source: "zendesk",
+              source_id: `zd_user_${uid}`,
+              confidence_score: 0.93,
+              properties: { role: item.role },
+            });
+          }
+        }
+      }
+
+      // Second pass — process tickets using collected user info
+      for (const item of results) {
+        if (item.result_type === "ticket") {
+          const ticketId = String(item.id || "");
+          if (!ticketId) continue;
+          const requesterId = String(item.requester_id || "");
+          const email = emailByRequesterId[requesterId] || "";
+          const name = nameByRequesterId[requesterId] || "";
+          const status = item.status as string;
+
+          events.push({
+            event_type: status === "solved" || status === "closed" ? "ticket_resolved" : "support_ticket",
+            identifiers: { ...(email ? { email } : {}), ticket_id: ticketId },
+            profile_data: { ...(name ? { name } : {}) },
+            source: "zendesk",
+            source_id: `zd_ticket_${ticketId}`,
+            confidence_score: 0.93,
+            properties: { subject: item.subject, priority: item.priority, status },
+          });
+        }
+      }
+    } catch { /* silent */ }
+
+    return events;
+  },
+
   async testConnection(credentials: Record<string, string>) {
     try {
       const { subdomain, email, api_token } = credentials;

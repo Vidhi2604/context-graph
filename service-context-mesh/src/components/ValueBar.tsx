@@ -16,53 +16,44 @@ export default function ValueBar({ stats }: ValueBarProps) {
   if (!stats) return null;
 
   const cards = [
-    { label: "Events Tracked", value: (stats.events_tracked ?? 0).toLocaleString() },
-    { label: "Profiles Resolved", value: (stats.profiles_resolved ?? 0).toString() },
-    { label: "Identities Merged", value: (stats.identity_fragments ?? 0).toString() },
+    { label: "Events Tracked", value: (stats.events_tracked ?? 0).toLocaleString(), href: "/dashboard/events" },
+    { label: "Profiles Resolved", value: (stats.profiles_resolved ?? 0).toLocaleString(), href: "/dashboard/profiles" },
+    { label: "Identities Merged", value: (stats.identity_fragments ?? 0).toLocaleString(), href: null },
     {
-      label: "Commitments",
+      label: "Commitments (Open/Done/Missed)",
       value: `${stats.commitments?.open || 0}/${stats.commitments?.fulfilled || 0}/${stats.commitments?.breached || 0}`,
-      sub: "O/F/B",
+      href: null,
     },
     {
       label: "Avg Confidence",
-      value: stats.avg_extraction_confidence
-        ? `${Math.round(stats.avg_extraction_confidence * 100)}%`
-        : "—",
+      value: stats.avg_extraction_confidence ? `${Math.round(stats.avg_extraction_confidence * 100)}%` : "—",
+      href: null,
     },
   ];
 
   return (
-    <div className="grid grid-cols-5 gap-3">
+    <div className="flex gap-2 overflow-x-auto pb-1">
       {cards.map((card) => {
-        const inner = (
+        const content = (
           <>
-            <div className="text-2xl font-bold text-white tracking-tight">{card.value}</div>
-            <div className="text-xs text-gray-400 mt-0.5 font-medium">
+            <div className="text-xl font-bold tracking-tight whitespace-nowrap" style={{ color: "var(--text-primary)" }}>
+              {card.value}
+            </div>
+            <div className="text-xs font-medium whitespace-nowrap mt-0.5" style={{ color: "var(--text-muted)" }}>
               {card.label}
-              {card.sub && <span className="ml-1 text-gray-500">({card.sub})</span>}
             </div>
           </>
         );
-        if (card.label === "Events Tracked") {
-          return (
-            <Link key={card.label} href="/dashboard/events"
-              className="bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 text-center hover:border-emerald-700 hover:bg-gray-800/60 transition-all cursor-pointer">
-              {inner}
-            </Link>
-          );
-        }
-        if (card.label === "Profiles Resolved") {
-          return (
-            <Link key={card.label} href="/dashboard/profiles"
-              className="bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 text-center hover:border-emerald-700 hover:bg-gray-800/60 transition-all cursor-pointer">
-              {inner}
-            </Link>
-          );
-        }
-        return (
-          <div key={card.label} className="bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 text-center">
-            {inner}
+
+        const cls = "flex-1 min-w-[120px] theme-card px-4 py-3 text-center transition-all";
+
+        return card.href ? (
+          <Link key={card.label} href={card.href} className={`${cls} theme-card-hover`}>
+            {content}
+          </Link>
+        ) : (
+          <div key={card.label} className={cls}>
+            {content}
           </div>
         );
       })}

@@ -120,6 +120,55 @@ export const HubSpotAdapter: ConnectorAdapter = {
     return events;
   },
 
+  async liveSearch(query: string, credentials: Record<string, string>): Promise<ContextMeshEvent[]> {
+    const token = credentials.access_token;
+    if (!token) return [];
+
+    const events: ContextMeshEvent[] = [];
+
+    try {
+      // Search contacts by name or email
+      const res = await fetch("https://api.hubapi.com/crm/v3/objects/contacts/search", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filterGroups: [
+            { filters: [{ propertyName: "email", operator: "CONTAINS_TOKEN", value: query }] },
+            { filters: [{ propertyName: "firstname", operator: "CONTAINS_TOKEN", value: query }] },
+            { filters: [{ propertyName: "lastname", operator: "CONTAINS_TOKEN", value: query }] },
+          ],
+          properties: ["email", "phone", "firstname", "lastname", "lifecyclestage"],
+          limit: 10,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        for (const contact of data.results || []) {
+          const p = contact.properties;
+          if (!p.email && !p.phone) continue;
+          events.push({
+            event_type: "contact_updated",
+            identifiers: {
+              ...(p.email ? { email: p.email } : {}),
+              ...(p.phone ? { phone: p.phone } : {}),
+              crm_id: contact.id,
+            },
+            profile_data: {
+              name: [p.firstname, p.lastname].filter(Boolean).join(" "),
+              tier: mapLifecycleToTier(p.lifecyclestage),
+            },
+            source: "hubspot",
+            source_id: `hs_contact_${contact.id}`,
+            confidence_score: 0.95,
+          });
+        }
+      }
+    } catch { /* silent — live search is best-effort */ }
+
+    return events;
+  },
+
   async testConnection(credentials: Record<string, string>) {
     try {
       const res = await fetch("https://api.hubapi.com/crm/v3/objects/contacts?limit=1", {

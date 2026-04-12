@@ -154,7 +154,7 @@ export async function processEventsBatch(
 async function createRetailEvent(eventId: string, profileId: string, event: Record<string, unknown>, timestamp: string, tenantId: string) {
   await runQuery(
     `MATCH (p:Profile {profile_id: $profileId, _tenant: $tenantId})
-     CREATE (e:Event { id: $eventId, event_type: $eventType, timestamp: datetime($timestamp), status: $status, amount: $amount, channel: $channel, payment_method: $paymentMethod, exception: $exception, confidence_score: $confidence, properties: $properties, _tenant: $tenantId, created_at: datetime() })
+     CREATE (e:Event { id: $eventId, event_type: $eventType, timestamp: datetime($timestamp), status: $status, amount: $amount, channel: $channel, payment_method: $paymentMethod, exception: $exception, confidence_score: $confidence, properties: $properties, _ingest_source: $ingestSource, _tenant: $tenantId, created_at: datetime() })
      CREATE (p)-[:PERFORMED]->(e)`,
     {
       profileId, tenantId, eventId,
@@ -167,6 +167,7 @@ async function createRetailEvent(eventId: string, profileId: string, event: Reco
       exception: !!(event.properties as Record<string, unknown>)?.exception,
       confidence: (event.confidence_score as number) || 1.0,
       properties: JSON.stringify(event.properties || {}),
+      ingestSource: (event._ingest_source as string) || "api",
     }
   );
 }
@@ -175,9 +176,9 @@ async function createHealthcareVisit(visitId: string, profileId: string, event: 
   const visit = (event.visit || {}) as Record<string, unknown>;
   await runQuery(
     `MATCH (p:Profile {profile_id: $profileId, _tenant: $tenantId})
-     CREATE (v:Visit { visit_id: $visitId, type: $visitType, timestamp: datetime($timestamp), department: $department, status: $visitStatus, priority: $priority, duration_hours: $duration, confidence_score: $confidence, _tenant: $tenantId, created_at: datetime() })
+     CREATE (v:Visit { visit_id: $visitId, type: $visitType, timestamp: datetime($timestamp), department: $department, status: $visitStatus, priority: $priority, duration_hours: $duration, confidence_score: $confidence, _ingest_source: $ingestSource, _tenant: $tenantId, created_at: datetime() })
      CREATE (p)-[:HAD_VISIT]->(v)`,
-    { profileId, tenantId, visitId, visitType: (visit.type as string) || (event.event_type as string) || "Outpatient", timestamp, department: (visit.department as string) || null, visitStatus: (visit.status as string) || "Discharged", priority: (visit.priority as string) || "Medium", duration: (visit.duration_hours as number) || null, confidence: (event.confidence_score as number) || 1.0 }
+    { profileId, tenantId, visitId, visitType: (visit.type as string) || (event.event_type as string) || "Outpatient", timestamp, department: (visit.department as string) || null, visitStatus: (visit.status as string) || "Discharged", priority: (visit.priority as string) || "Medium", duration: (visit.duration_hours as number) || null, confidence: (event.confidence_score as number) || 1.0, ingestSource: (event._ingest_source as string) || "api" }
   );
 }
 

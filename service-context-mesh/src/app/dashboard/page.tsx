@@ -144,10 +144,9 @@ function ExportButton({ graph, insight, query, orgId }: { graph: GraphResult | n
   return (
     <div className="relative">
       <button onClick={handleExportClick} disabled={loading}
-        className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-colors disabled:opacity-50 ${
-          hasData ? "border-gray-700 text-gray-400 hover:text-white hover:border-gray-600" : "border-gray-800 text-gray-600 cursor-not-allowed"
-        }`}>
-        {loading ? "Exporting..." : "⬇ Export"}
+        className="flex items-center gap-1.5 text-sm px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
+        style={{ background:"var(--bg-surface-2)", color: hasData ? "var(--text-primary)" : "var(--text-muted)", border:"1px solid var(--border)", cursor: hasData ? "pointer" : "not-allowed" }}>
+        {loading ? "Exporting..." : "⬆ Export"}
       </button>
       {tooltip && (
         <div className="absolute right-0 top-full mt-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-gray-300 whitespace-nowrap z-50">
@@ -199,8 +198,25 @@ function DashboardPageInner() {
   const [, setTrace] = useState<PipelineTrace | null>(null);
   const [lastQuery, setLastQuery] = useState("");
   const [activeFilters, setActiveFilters] = useState<Record<string, string[]>>({});
+  const [loadingStep, setLoadingStep] = useState(0);
+  const LOADING_STEPS = [
+    "Translating to graph query...",
+    "Traversing knowledge graph...",
+    "Resolving identities...",
+    "Building timeline...",
+    "Mapping relationships...",
+    "Almost there...",
+  ];
+
+  useEffect(() => {
+    if (!loading) { setLoadingStep(0); return; }
+    setLoadingStep(0);
+    const interval = setInterval(() => setLoadingStep(s => (s + 1) % 6), 1400);
+    return () => clearInterval(interval);
+  }, [loading]);
   const [dynamicFilters, setDynamicFilters] = useState<FilterConfig[]>([]);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [activityPanelWidth, setActivityPanelWidth] = useState(460);
   const userMenuRef = useRef<HTMLDivElement>(null);
 
   const { data: session, status } = useSession({
@@ -258,6 +274,9 @@ function DashboardPageInner() {
       localStorage.setItem("vertical", session.vertical || "retail");
       localStorage.setItem("plan", session.plan || "enterprise");
     }
+    if (session?.apiKey) {
+      localStorage.setItem("apiKey", session.apiKey);
+    }
   }, [session]);
 
   // Close user menu on outside click
@@ -275,8 +294,8 @@ function DashboardPageInner() {
     if (!orgId) return;
     fetch("/api/stats", { headers: { "x-org-id": orgId } })
       .then((r) => r.json())
-      .then(setStats)
-      .catch(() => {});
+      .then((d) => { if (d.events_tracked !== undefined) setStats(d); else setStats({ events_tracked: 0, profiles_resolved: 0, identity_fragments: 0, commitments: {}, avg_extraction_confidence: 0 }); })
+      .catch(() => { setStats({ events_tracked: 0, profiles_resolved: 0, identity_fragments: 0, commitments: {}, avg_extraction_confidence: 0 }); });
   }, [orgId]);
 
   useEffect(() => {
@@ -310,7 +329,7 @@ function DashboardPageInner() {
       });
       const data = await res.json();
 
-      if (!res.ok) { setError(data.error || "Search failed"); return; }
+      if (!res.ok) { setError(data.error || "Something went wrong. Please try again."); return; }
 
       setGraph(data.results);
       setLastQuery(query);
@@ -318,7 +337,7 @@ function DashboardPageInner() {
       setCypherInfo({ cypher: data.cypher, confidence: data.cypher_confidence, interpretation: data.interpretation });
       if (data._trace) setTrace(data._trace);
     } catch {
-      setError("Failed to search");
+      setError("Something went wrong. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -380,96 +399,111 @@ function DashboardPageInner() {
 
 
   return (
-    <div className={`min-h-screen bg-gray-950 text-white ${debugMode ? "pr-[460px]" : ""}`}>
+    <div className="min-h-screen" style={{ background: "var(--bg-base)", color: "var(--text-primary)", ...(debugMode ? { paddingRight: activityPanelWidth } : {}) }}>
       {/* Header */}
-      <header className="border-b border-gray-800 bg-gray-900 px-6 py-3">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Link href="/">
-              <Logo size={36} showText />
-            </Link>
+      <header className="border-b px-4 py-5" style={{ background: "var(--bg-surface)", borderColor: "var(--border)", boxShadow: "var(--shadow-sm)" }}>
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-2">
+          {/* Left: logo + org */}
+          <div className="flex items-center gap-3 min-w-0">
+            <Link href="/"><Logo size={44} /></Link>
             <OrgSwitcher currentOrgId={orgId} currentVertical={vertical} />
-            <span className="text-xs font-semibold bg-emerald-900/30 text-emerald-400 px-2.5 py-1 rounded capitalize">
+            <span className="hidden sm:inline text-xs font-semibold bg-emerald-900/30 text-emerald-400 px-2 py-0.5 rounded capitalize shrink-0">
               {plan}
             </span>
           </div>
-          <div className="flex items-center gap-3">
-            {/* Nav */}
-            <nav className="flex gap-1">
-              <Link href="/dashboard/analytics" className="px-4 py-2 text-sm font-medium text-gray-400 hover:text-white hover:bg-gray-800/50 rounded-lg transition-colors">Analytics</Link>
-              <Link href="/dashboard/policies" className="px-4 py-2 text-sm font-medium text-gray-400 hover:text-white hover:bg-gray-800/50 rounded-lg transition-colors">Drift Analysis</Link>
-              <Link href="/dashboard/agents" className="px-4 py-2 text-sm font-medium text-gray-400 hover:text-white hover:bg-gray-800/50 rounded-lg transition-colors">Agents</Link>
-              <Link href="/dashboard/commitments" className="px-4 py-2 text-sm font-medium text-gray-400 hover:text-white hover:bg-gray-800/50 rounded-lg transition-colors">Commitments</Link>
-            </nav>
 
-            {/* Debug toggle */}
+          {/* Center: nav */}
+          <nav className="hidden md:flex items-center justify-center gap-0.5">
+            {[
+              { href: "/dashboard/analytics", label: "Analytics" },
+              { href: "/dashboard/policies", label: "Drift" },
+              { href: "/dashboard/agents", label: "Agents" },
+              { href: "/dashboard/commitments", label: "Commitments" },
+            ].map(({ href, label }) => (
+              <Link key={href} href={href}
+                className="px-3 py-1.5 text-sm font-medium rounded-lg transition-colors"
+                style={{ color: "var(--text-secondary)" }}
+                onMouseEnter={e => { (e.target as HTMLElement).style.color = "var(--text-primary)"; (e.target as HTMLElement).style.background = "var(--bg-surface-2)"; }}
+                onMouseLeave={e => { (e.target as HTMLElement).style.color = "var(--text-secondary)"; (e.target as HTMLElement).style.background = ""; }}
+              >{label}</Link>
+            ))}
+          </nav>
+
+          {/* Right: actions + user */}
+          <div className="flex items-center justify-end gap-2">
+            {/* Activity Panel toggle */}
             <button
               onClick={() => { setDebugMode(!debugMode); if (!debugMode) setTrace(null); }}
-              className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-colors ${
+              className={`hidden sm:flex items-center gap-1.5 text-sm px-4 py-2 rounded-full font-medium border transition-all ${
                 debugMode
-                  ? "bg-purple-900/30 border-purple-700 text-purple-300"
-                  : "border-gray-700 text-gray-500 hover:text-white hover:border-gray-600"
+                  ? "bg-purple-600/20 border-purple-500 text-purple-300"
+                  : "bg-gray-800 border-gray-600 text-gray-300 hover:border-gray-400 hover:text-white"
               }`}
             >
-              🔬 Debug
+              ⚡ Activity
             </button>
 
-            {/* Export button */}
-            <ExportButton graph={filteredGraph} insight={insight} query={lastQuery} orgId={orgId} />
-
             {/* User menu */}
-            <div ref={userMenuRef} className="relative border-l border-gray-800 pl-3">
+            <div ref={userMenuRef} className="relative pl-2" style={{ borderLeft: "1px solid var(--border)" }}>
               <button
                 onClick={() => setUserMenuOpen(o => !o)}
                 className="flex items-center gap-2 focus:outline-none hover:opacity-80 transition-opacity"
               >
-                <div className="w-8 h-8 rounded-full bg-emerald-700 flex items-center justify-center text-sm font-bold text-white">
+                <div className="w-8 h-8 rounded-full bg-emerald-600 flex items-center justify-center text-sm font-bold text-white shrink-0">
                   {session?.user?.name?.[0]?.toUpperCase() || session?.user?.email?.[0]?.toUpperCase() || "U"}
                 </div>
               </button>
 
               {userMenuOpen && (
-                <div className="absolute right-0 top-full mt-2 w-56 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl z-50 overflow-hidden">
+                <div className="absolute right-0 top-full mt-2 w-56 rounded-xl shadow-2xl z-50 overflow-hidden theme-card" style={{ boxShadow: "var(--shadow-lg)" }}>
                   {/* User info */}
-                  <div className="px-4 py-3 border-b border-gray-800">
-                    <div className="text-sm font-medium text-white truncate">
-                      {session?.user?.name || session?.user?.email?.split("@")[0] || "Demo User"}
+                  <div className="px-4 py-3" style={{ borderBottom: "1px solid var(--border)" }}>
+                    <div className="text-sm font-medium truncate" style={{ color: "var(--text-primary)" }}>
+                      {session?.user?.name || session?.user?.email?.split("@")[0] || "User"}
                     </div>
-                    <div className="text-xs text-gray-500 truncate mt-0.5">{session?.user?.email}</div>
+                    <div className="text-xs truncate mt-0.5" style={{ color: "var(--text-muted)" }}>{session?.user?.email}</div>
                     <div className="mt-2">
                       <span className={`text-[10px] px-2 py-0.5 rounded font-medium capitalize ${
                         lsPlan === "enterprise" ? "bg-purple-900/40 text-purple-300" :
-                        lsPlan === "pro" ? "bg-blue-900/40 text-blue-300" :
-                        "bg-gray-800 text-gray-400"
-                      }`}>
+                        lsPlan === "pro" ? "bg-blue-900/40 text-blue-300" : ""
+                      }`} style={!["enterprise","pro"].includes(lsPlan) ? { background: "var(--bg-surface-2)", color: "var(--text-muted)" } : {}}>
                         {lsPlan || "starter"} plan
                       </span>
                     </div>
                   </div>
 
-                  {/* Nav items */}
+                  {/* Mobile nav links */}
+                  <div className="md:hidden py-1" style={{ borderBottom: "1px solid var(--border)" }}>
+                    {[
+                      { href: "/dashboard/analytics", label: "Analytics" },
+                      { href: "/dashboard/policies", label: "Drift Analysis" },
+                      { href: "/dashboard/agents", label: "Agents" },
+                      { href: "/dashboard/commitments", label: "Commitments" },
+                    ].map(({ href, label }) => (
+                      <Link key={href} href={href} onClick={() => setUserMenuOpen(false)}
+                        className="flex items-center px-4 py-2.5 text-sm transition-colors"
+                        style={{ color: "var(--text-secondary)" }}>
+                        {label}
+                      </Link>
+                    ))}
+                  </div>
+
                   <div className="py-1">
-                    <Link
-                      href="/settings"
-                      onClick={() => setUserMenuOpen(false)}
-                      className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
-                    >
+                    <Link href="/settings" onClick={() => setUserMenuOpen(false)}
+                      className="flex items-center gap-3 px-4 py-2.5 text-sm transition-colors"
+                      style={{ color: "var(--text-secondary)" }}>
                       <span>⚙️</span> Settings
                     </Link>
-                    <Link
-                      href="/api-docs"
-                      onClick={() => setUserMenuOpen(false)}
-                      className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
-                    >
+                    <Link href="/api-docs" onClick={() => setUserMenuOpen(false)}
+                      className="flex items-center gap-3 px-4 py-2.5 text-sm transition-colors"
+                      style={{ color: "var(--text-secondary)" }}>
                       <span>📄</span> API Docs
                     </Link>
                   </div>
 
-                  <div className="border-t border-gray-800 py-1">
-                    <button
-                      onClick={() => signOut({ callbackUrl: "/auth/signin" })}
-                      className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-400 hover:bg-red-900/20 transition-colors"
-                    >
+                  <div className="py-1" style={{ borderTop: "1px solid var(--border)" }}>
+                    <button onClick={() => signOut({ callbackUrl: "/auth/signin" })}
+                      className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-400 hover:bg-red-900/20 transition-colors">
                       <span>↪</span> Sign Out
                     </button>
                   </div>
@@ -497,30 +531,61 @@ function DashboardPageInner() {
           onClear={handleFilterClear}
         />
 
-        {error && (
-          <div className="bg-red-950/50 border border-red-800 rounded-lg px-4 py-3 text-red-400 text-sm">
-            {error}
+        {loading && (
+          <div className="flex flex-col items-center justify-center py-32 space-y-5">
+            <div className="flex gap-1.5">
+              {[0,1,2].map(i => (
+                <span key={i} className="w-2.5 h-2.5 rounded-full bg-blue-500 animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
+              ))}
+            </div>
+            <p className="text-xl font-medium animate-pulse" style={{ color: "var(--text-primary)" }}>
+              {LOADING_STEPS[loadingStep]}
+            </p>
+          </div>
+        )}
+
+        {!loading && error && (
+          <div className="flex flex-col items-center justify-center py-24 space-y-4 text-center">
+            <div className="text-5xl">🔍</div>
+            <h2 className="text-2xl font-semibold" style={{ color: "var(--text-primary)" }}>No results found</h2>
+            <p className="text-base max-w-sm" style={{ color: "var(--text-muted)" }}>
+              We couldn&apos;t find anything matching your search. Try a different name, email, or event type.
+            </p>
+          </div>
+        )}
+
+        {!loading && filteredGraph && filteredGraph.nodes.length === 0 && !error && lastQuery && (
+          <div className="flex flex-col items-center justify-center py-24 space-y-4 text-center">
+            <div className="text-5xl">🔎</div>
+            <h2 className="text-2xl font-semibold" style={{ color: "var(--text-primary)" }}>No data yet for &quot;{lastQuery}&quot;</h2>
+            <p className="text-base max-w-sm" style={{ color: "var(--text-muted)" }}>
+              We&apos;re searching connected sources in the background. Try again in a moment, or import data from Settings.
+            </p>
           </div>
         )}
 
         {filteredGraph && filteredGraph.nodes.length > 0 && (
           <>
             <div className="flex items-center justify-between">
-              <span className="text-sm text-gray-500">
+              <span className="text-sm" style={{ color: "var(--text-muted)" }}>
                 {filteredGraph.summary.total_nodes} nodes · {filteredGraph.summary.total_edges} edges
                 {Object.values(activeFilters).some(v=>v.length>0) && (
                   <span className="ml-2 text-xs text-emerald-500">filtered</span>
                 )}
               </span>
-              <button
-                onClick={() => handleAnalyze()}
-                className="bg-gray-800 hover:bg-gray-700 text-sm px-4 py-1.5 rounded-lg transition-colors"
-              >
-                🧠 Analyze
-              </button>
+              <div className="flex items-center gap-2">
+                <ExportButton graph={filteredGraph} insight={insight} query={lastQuery} orgId={orgId} />
+                <button
+                  onClick={() => handleAnalyze()}
+                  className="text-sm px-4 py-2 rounded-lg font-medium transition-colors"
+                  style={{ background: "var(--bg-surface-2)", color: "var(--text-primary)", border: "1px solid var(--border)" }}
+                >
+                  🧠 Analyze
+                </button>
+              </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
               <div className="col-span-2" id="export-graph">
                 <ContextGraph
                   nodes={filteredGraph.nodes}
@@ -532,7 +597,7 @@ function DashboardPageInner() {
                 />
               </div>
               {/* Right panel: NodeDetail when node selected, else Timeline */}
-              <div id="export-timeline" className="h-[600px] bg-gray-950 border border-gray-800 rounded-xl overflow-hidden flex flex-col">
+              <div id="export-timeline" className="h-[600px] rounded-xl overflow-hidden flex flex-col theme-card">
                 {selectedNode ? (
                   <NodeDetail
                     node={selectedNode}
@@ -553,30 +618,42 @@ function DashboardPageInner() {
           </>
         )}
 
-        {!graph && !loading && !error && (
-          stats?.events_tracked === 0 || !stats ? (
-            <div className="text-center py-24 space-y-4">
-              <div className="text-5xl">📂</div>
-              <h2 className="text-xl font-semibold">No data yet</h2>
-              <p className="text-gray-500 max-w-sm mx-auto text-sm">
-                Import your first dataset to start building context graphs and timelines.
-              </p>
-              <div className="flex gap-3 justify-center mt-2">
-                <Link href="/import"
-                  className="bg-emerald-600 hover:bg-emerald-500 px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors">
-                  Import Data
-                </Link>
+        {!graph && !loading && !error && stats !== null && (
+          (!stats.events_tracked || stats.events_tracked === 0) ? (
+            <div className="py-16 flex flex-col items-center">
+              <div className="theme-card p-10 max-w-2xl w-full text-center space-y-6">
+                <div className="w-16 h-16 rounded-2xl bg-emerald-500/10 flex items-center justify-center mx-auto text-3xl">📂</div>
+                <div>
+                  <h2 className="text-2xl font-bold mb-2" style={{ color: "var(--text-primary)" }}>No data yet</h2>
+                  <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+                    Connect a CRM, upload a CSV, or paste JSON to start building context graphs.
+                  </p>
+                </div>
+                <div className="grid grid-cols-3 gap-3 text-left">
+                  {[
+                    { icon: "🔌", title: "Connect CRM", desc: "HubSpot, Salesforce, Zendesk", href: "/settings" },
+                    { icon: "📄", title: "Upload CSV", desc: "Drag & drop any spreadsheet", href: "/settings" },
+                    { icon: "{ }", title: "Paste JSON", desc: "Raw events or API responses", href: "/settings" },
+                  ].map(opt => (
+                    <Link key={opt.title} href={opt.href}
+                      className="theme-card theme-card-hover p-4 rounded-xl flex flex-col gap-1 cursor-pointer">
+                      <span className="text-xl">{opt.icon}</span>
+                      <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{opt.title}</span>
+                      <span className="text-xs" style={{ color: "var(--text-muted)" }}>{opt.desc}</span>
+                    </Link>
+                  ))}
+                </div>
                 <Link href="/settings"
-                  className="bg-gray-800 hover:bg-gray-700 border border-gray-700 px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors">
-                  Connect a Source
+                  className="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-3 rounded-xl text-sm font-semibold transition-colors">
+                  Import Data →
                 </Link>
               </div>
             </div>
           ) : (
             <div className="text-center py-24">
               <div className="text-4xl mb-4">🔍</div>
-              <h2 className="text-xl font-semibold mb-2">Search to Explore</h2>
-              <p className="text-gray-500 max-w-md mx-auto">
+              <h2 className="text-xl font-semibold mb-2" style={{ color: "var(--text-primary)" }}>Search to Explore</h2>
+              <p style={{ color: "var(--text-muted)" }} className="max-w-md mx-auto text-sm">
                 Type any question about your data — customer names, events, products, or combine them all.
               </p>
             </div>
@@ -596,6 +673,7 @@ function DashboardPageInner() {
           orgId={orgId}
           resetKey={activityKey}
           onClose={() => setDebugMode(false)}
+          onWidthChange={setActivityPanelWidth}
         />
       )}
     </div>

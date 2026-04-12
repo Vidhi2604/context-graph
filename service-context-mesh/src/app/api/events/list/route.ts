@@ -46,7 +46,8 @@ export async function GET(req: NextRequest) {
          e.amount AS amount,
          e.channel AS channel,
          e.confidence_score AS confidence,
-         e.properties AS properties
+         e.properties AS properties,
+         e._ingest_source AS ingest_source
        ORDER BY e.timestamp DESC
        SKIP toInteger($offset) LIMIT toInteger($limit)`,
       { t, search, eventType, offset, limit }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Logo from "@/components/Logo";
 import { useSession } from "next-auth/react";
 
 
@@ -56,7 +57,6 @@ export default function OnboardingPage() {
   const [orgName, setOrgName] = useState("");
   const [vertical, setVertical] = useState<string | null>(null);
   const [plan, setPlan] = useState("enterprise");
-  const [seedData, setSeedData] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -96,9 +96,8 @@ export default function OnboardingPage() {
         });
       }
 
-      // Init schema + seed data
-      const schemaUrl = seedData ? `/api/schema?seed=true` : `/api/schema`;
-      await fetch(schemaUrl, {
+      // Init schema
+      await fetch(`/api/schema`, {
         method: "POST",
         headers: { "x-org-id": org.id },
       });
@@ -111,7 +110,7 @@ export default function OnboardingPage() {
       if (userId) localStorage.setItem("userId", userId);
 
       // Force full reload so NextAuth session picks up the new org
-      window.location.href = seedData ? "/dashboard" : "/settings?onboarding=true";
+      window.location.href = "/settings";
     } catch {
       setError("Something went wrong. Please try again.");
     } finally {
@@ -124,9 +123,7 @@ export default function OnboardingPage() {
       <div className="max-w-2xl mx-auto space-y-10">
         {/* Header */}
         <div className="text-center">
-          <h1 className="text-3xl font-bold">
-            <span className="text-emerald-400">Context</span>Mesh
-          </h1>
+          <div class="flex justify-center"><Logo size={36} /></div>
           <p className="text-gray-500 mt-2">Set up your organization</p>
         </div>
 
@@ -197,19 +194,6 @@ export default function OnboardingPage() {
           </div>
         </div>
 
-        {/* Seed data toggle */}
-        <label className="flex items-center gap-3 cursor-pointer">
-          <div
-            onClick={() => setSeedData(!seedData)}
-            className={`w-10 h-6 rounded-full transition-colors relative ${seedData ? "bg-emerald-600" : "bg-gray-700"}`}
-          >
-            <div className={`w-4 h-4 bg-white rounded-full absolute top-1 transition-all ${seedData ? "left-5" : "left-1"}`} />
-          </div>
-          <div>
-            <div className="text-sm font-medium">Load demo data</div>
-            <div className="text-xs text-gray-500">50 realistic journeys with embedded patterns — ready to demo instantly</div>
-          </div>
-        </label>
 
         {error && (
           <div className="bg-red-950/50 border border-red-800 rounded-lg px-4 py-3 text-red-400 text-sm">
@@ -222,7 +206,7 @@ export default function OnboardingPage() {
           disabled={loading || !orgName || !vertical}
           className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 py-4 rounded-xl font-medium text-lg transition-colors"
         >
-          {loading ? (seedData ? "Setting up + loading demo data..." : "Setting up...") : "Launch Dashboard →"}
+          {loading ? "Setting up..." : "Launch Dashboard →"}
         </button>
       </div>
     </div>
