@@ -50,3 +50,6 @@ configMap:
 
 secret:
   enabled: false
+
+serviceAccount:
+  create: true
