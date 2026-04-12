@@ -115,7 +115,7 @@ function PersonTimeline({ events, onEventClick }: {
         {events.map((evt) => {
           const ts = formatTimestamp(String(evt.properties.timestamp));
           const type = String(evt.properties.event_type || evt.properties.type || evt.label);
-          const isCall = type === 'support_call' || type === 'call' || evt.properties.direction;
+          const isCall = type === 'support_call' || type === 'call' || !!evt.properties.direction;
           const color = isCall
             ? (evt.properties.outcome === 'completed' ? '#10b981'
               : evt.properties.outcome === 'transferred' ? '#f59e0b'
