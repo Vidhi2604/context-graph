@@ -800,7 +800,7 @@ function WebhooksSection({ orgId }: { orgId: string }) {
               className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-emerald-500"
             />
             <p className="text-[10px] text-gray-600 mt-1">
-              Supported: <code>finding contains "..."</code> · <code>recommendation contains "..."</code> · <code>confidence &gt; 0.8</code> · <code>impact contains "..."</code>
+              Supported: <code>finding contains &quot;...&quot;</code> · <code>recommendation contains &quot;...&quot;</code> · <code>confidence &gt; 0.8</code> · <code>impact contains &quot;...&quot;</code>
             </p>
           </div>
           <div className="flex gap-2">

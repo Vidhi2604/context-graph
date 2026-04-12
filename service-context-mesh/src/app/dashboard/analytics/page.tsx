@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import DashboardHeader from "@/components/DashboardHeader";
 
 interface StatsData {

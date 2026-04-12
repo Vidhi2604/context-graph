@@ -13,7 +13,6 @@ COPY . .
 
 # Install ALL deps (including devDeps needed for build: tailwindcss, postcss, etc.)
 RUN npm ci --include=dev
-RUN cp prisma/schema.prod.prisma prisma/schema.prisma && npx prisma generate
 RUN npm run build
 
 # Copy static assets into standalone output (required for CSS/JS to be served)
@@ -24,4 +23,4 @@ ENV NODE_ENV=production
 
 EXPOSE 3000
 ENV PORT=3000 HOSTNAME="0.0.0.0"
-CMD ["sh", "-c", "npx prisma db push --schema=prisma/schema.prisma --skip-generate && node .next/standalone/server.js"]
+CMD ["sh", "-c", "./node_modules/.bin/prisma db push --schema=prisma/schema.prisma --skip-generate && node .next/standalone/server.js"]

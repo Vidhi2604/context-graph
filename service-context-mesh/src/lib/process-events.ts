@@ -1,6 +1,5 @@
 import { resolveIdentity } from "@/lib/identity-resolver";
 import { runQuery } from "@/lib/neo4j";
-import { createCommitment } from "@/lib/commitment-tracker";
 import { classifyConfidence, enqueueForReview } from "@/lib/review-queue";
 import { logActivity, completeActivity } from "@/lib/activity-log";
 import { auditLog } from "@/lib/audit-log";
