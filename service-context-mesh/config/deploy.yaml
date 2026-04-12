@@ -44,3 +44,9 @@ serviceMonitor:
 
 podMonitor:
   enabled: false
+
+configMap:
+  enabled: false
+
+secret:
+  enabled: false
