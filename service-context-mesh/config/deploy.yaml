@@ -9,9 +9,16 @@ docker:
 
 ingress:
   enabled: true
-  host: context-mesh.hack-apr-26.nurixlabs.com
-  path: /
-  pathType: Prefix
+  scheme: "internet-facing"
+  listenPorts: '[{"HTTP": 80},{"HTTPS": 443}]'
+  hosts:
+    - host: "context-mesh.hack.nurixlabs.tech"
+      paths:
+        - path: /
+          pathType: Prefix
+
+service:
+  targetPort: 3000
 
 resources:
   requests:

@@ -11,12 +11,17 @@ RUN adduser --system --uid 1001 nextjs
 # Copy everything
 COPY . .
 
-# Install and build
-RUN npm ci
+# Install ALL deps (including devDeps needed for build: tailwindcss, postcss, etc.)
+RUN npm ci --include=dev
 RUN npx prisma generate
 RUN npm run build
 
-USER nextjs
+# Copy static assets into standalone output (required for CSS/JS to be served)
+RUN cp -r .next/static .next/standalone/.next/static && \
+    if [ -d public ]; then cp -r public .next/standalone/public; fi
+
+ENV NODE_ENV=production
+
 EXPOSE 3000
 ENV PORT=3000 HOSTNAME="0.0.0.0"
 CMD ["node", ".next/standalone/server.js"]
