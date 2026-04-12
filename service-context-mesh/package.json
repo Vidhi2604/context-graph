@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "cp prisma/schema.dev.prisma prisma/schema.prisma && npx prisma generate && next dev",
-    "build": "cp prisma/schema.prod.prisma prisma/schema.prisma && npx prisma generate && npx prisma db push --skip-generate && next build",
+    "build": "cp prisma/schema.prod.prisma prisma/schema.prisma && npx prisma generate && next build",
+    "migrate": "npx prisma db push --schema=prisma/schema.prod.prisma --skip-generate",
     "start": "next start",
     "lint": "next lint",
     "db:dev": "cp prisma/schema.dev.prisma prisma/schema.prisma && npx prisma generate && DATABASE_URL='file:./prisma/dev.db' npx prisma db push",

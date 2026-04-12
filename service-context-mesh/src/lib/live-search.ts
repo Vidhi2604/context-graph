@@ -62,7 +62,7 @@ export async function triggerLiveSearch(
             _vertical: vertical,
           }));
 
-          const result = await processEventsBatch(tagged, tenantId, orgId);
+          const result = await processEventsBatch(tagged, tenantId, orgId, vertical);
           completeActivity(tenantId, actId, "success",
             `${result.processed} ingested · ${result.failed} failed`
           );

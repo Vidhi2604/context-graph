@@ -123,7 +123,7 @@ export default function OnboardingPage() {
       <div className="max-w-2xl mx-auto space-y-10">
         {/* Header */}
         <div className="text-center">
-          <div class="flex justify-center"><Logo size={36} /></div>
+          <div className="flex justify-center"><Logo size={36} /></div>
           <p className="text-gray-500 mt-2">Set up your organization</p>
         </div>
 

@@ -24,4 +24,4 @@ ENV NODE_ENV=production
 
 EXPOSE 3000
 ENV PORT=3000 HOSTNAME="0.0.0.0"
-CMD ["node", ".next/standalone/server.js"]
+CMD ["sh", "-c", "npx prisma db push --schema=prisma/schema.prisma --skip-generate && node .next/standalone/server.js"]
