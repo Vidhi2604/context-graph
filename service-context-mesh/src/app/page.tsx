@@ -1,11 +1,13 @@
 import Link from "next/link";
 import Logo from "@/components/Logo";
+import DNABackground from "@/components/DNABackground";
 
 export default function Home() {
   return (
-    <div className="min-h-screen bg-gray-950 text-white flex flex-col">
+    <div className="relative min-h-screen bg-gray-950 text-white flex flex-col">
+      <DNABackground />
       {/* Nav */}
-      <nav className="flex items-center justify-between px-8 py-5 border-b border-gray-900">
+      <nav className="relative z-10 flex items-center justify-between px-8 py-5 border-b border-gray-900">
         <Logo size={32} showText />
         <div className="flex items-center gap-6 text-sm text-gray-400">
           <Link href="/api-docs" className="hover:text-white transition-colors">API Docs</Link>
@@ -20,7 +22,7 @@ export default function Home() {
       </nav>
 
       {/* Hero */}
-      <main className="flex-1 flex flex-col items-center justify-center px-6 text-center">
+      <main className="relative z-10 flex-1 flex flex-col items-center justify-center px-6 text-center">
         <div className="max-w-3xl">
           {/* Icon hero */}
           <div className="flex justify-center mb-8">
@@ -95,7 +97,7 @@ export default function Home() {
         </div>
       </main>
 
-      <footer className="text-center py-6 text-gray-800 text-xs border-t border-gray-900">
+      <footer className="relative z-10 text-center py-6 text-gray-800 text-xs border-t border-gray-900">
         ContextMesh · Universal Context Graph · Built by Latency Labs
       </footer>
     </div>
