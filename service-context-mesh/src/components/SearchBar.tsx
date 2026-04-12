@@ -9,11 +9,11 @@ interface SearchBarProps {
   orgId?: string;
 }
 
+
 export default function SearchBar({ onSearch, loading, cypherInfo, orgId }: SearchBarProps) {
   const [query, setQuery] = useState("");
   const [showCypher, setShowCypher] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
-
   useEffect(() => {
     if (!orgId) return;
     fetch("/api/search/suggestions", { headers: { "x-org-id": orgId } })
@@ -37,20 +37,30 @@ export default function SearchBar({ onSearch, loading, cypherInfo, orgId }: Sear
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
             placeholder="Search anything..."
-            className="w-full bg-gray-900 border border-gray-700 rounded-lg pl-10 pr-4 py-3 text-sm focus:outline-none focus:border-emerald-500 transition-colors"
+            disabled={loading}
+            className="w-full bg-gray-900 border border-gray-700 rounded-lg pl-9 pr-4 py-2 text-sm focus:outline-none focus:border-emerald-500 transition-colors disabled:opacity-60"
           />
         </div>
         <button
           onClick={handleSubmit}
           disabled={loading || !query.trim()}
-          className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-6 py-3 rounded-lg text-sm font-medium transition-colors"
+          className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-5 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 min-w-[100px] justify-center"
         >
-          {loading ? "Searching..." : "Search"}
+          {loading ? (
+            <>
+              <svg className="animate-spin h-3.5 w-3.5 text-white shrink-0" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+              </svg>
+              Search
+            </>
+          ) : "Search"}
         </button>
       </div>
 
+
       {/* Dynamic suggestions */}
-      {suggestions.length > 0 && !query && (
+      {suggestions.length > 0 && !query && !loading && (
         <div className="flex flex-wrap gap-2">
           {suggestions.map((s, i) => (
             <button
@@ -65,7 +75,7 @@ export default function SearchBar({ onSearch, loading, cypherInfo, orgId }: Sear
       )}
 
       {/* Cypher info */}
-      {cypherInfo && (
+      {cypherInfo && !loading && (
         <div className="text-xs text-gray-600">
           <button
             onClick={() => setShowCypher(!showCypher)}

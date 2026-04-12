@@ -28,7 +28,7 @@ export default function DashboardHeader({ orgId = "", vertical = "retail", plan 
       <div className="max-w-7xl mx-auto flex items-center justify-between">
         {/* Left: logo + org switcher */}
         <div className="flex items-center gap-4">
-          <Link href="/dashboard"><Logo size={36} showText /></Link>
+          <Link href="/dashboard"><Logo size={36} /></Link>
           {orgId && <OrgSwitcher currentOrgId={orgId} currentVertical={vertical} />}
           {plan && (
             <span className="text-xs font-semibold bg-emerald-900/40 text-emerald-300 px-2.5 py-1 rounded-md capitalize border border-emerald-800/50">

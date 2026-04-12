@@ -19,17 +19,48 @@ interface EventRow {
   channel: string;
   confidence: number;
   properties: Record<string, unknown>;
+  ingest_source: string;
+}
+
+const SOURCE_META: Record<string, { label: string; logo: string | null; color: string }> = {
+  hubspot:      { label: "HubSpot",     logo: "/logos/hubspot.svg",     color: "#ff7a59" },
+  zendesk:      { label: "Zendesk",     logo: "/logos/zendesk.svg",     color: "#5b8fff" },
+  salesforce:   { label: "Salesforce",  logo: "/logos/salesforce.svg",  color: "#00a1e0" },
+  zoho:         { label: "Zoho",        logo: null,                      color: "#e42527" },
+  nurix:        { label: "Nurix",       logo: null,                      color: "#6366f1" },
+  csv_import:   { label: "CSV",         logo: null,                      color: "#10b981" },
+  json_import:  { label: "JSON",        logo: null,                      color: "#f59e0b" },
+  api:          { label: "API",         logo: null,                      color: "#8b5cf6" },
+  webhook:      { label: "Webhook",     logo: null,                      color: "#ec4899" },
+};
+
+function SourceBadge({ source }: { source: string }) {
+  const meta = SOURCE_META[source] || { label: source || "unknown", logo: null, color: "#6b7280" };
+  return (
+    <div className="flex items-center gap-1.5">
+      {meta.logo ? (
+        <img src={meta.logo} alt={meta.label} className="w-4 h-4 object-contain" />
+      ) : (
+        <div className="w-4 h-4 rounded flex items-center justify-center text-[8px] font-bold text-white"
+          style={{ background: meta.color }}>
+          {meta.label[0]}
+        </div>
+      )}
+      <span className="text-xs" style={{ color: meta.color }}>{meta.label}</span>
+    </div>
+  );
 }
 
 export default function EventsPage() {
   const { data: session } = useSession({ required: true });
   const router = useRouter();
-  const orgId = (session as { orgId?: string })?.orgId || "";
+  const orgId = (session as { orgId?: string })?.orgId || (typeof window !== "undefined" ? localStorage.getItem("orgId") : "") || "";
 
   const [events, setEvents] = useState<EventRow[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(1);
+  const [limit, setLimit] = useState(15);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
   const [eventType, setEventType] = useState("");
@@ -40,7 +71,7 @@ export default function EventsPage() {
     if (!orgId) return;
     setLoading(true);
     try {
-      const params = new URLSearchParams({ page: String(page), limit: "50" });
+      const params = new URLSearchParams({ page: String(page), limit: String(limit) });
       if (search) params.set("search", search);
       if (eventType) params.set("event_type", eventType);
       const res = await fetch(`/api/events/list?${params}`, { headers: { "x-org-id": orgId } });
@@ -52,7 +83,7 @@ export default function EventsPage() {
     } finally {
       setLoading(false);
     }
-  }, [orgId, page, search, eventType]);
+  }, [orgId, page, limit, search, eventType]);
 
   useEffect(() => { fetchEvents(); }, [fetchEvents]);
 
@@ -74,7 +105,7 @@ export default function EventsPage() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-6 pt-20 pb-10 space-y-4">
+      <main className="max-w-7xl mx-auto px-6 pt-20 pb-4 flex flex-col gap-4" style={{ height: "100vh" }}>
         {/* Filters */}
         <div className="flex gap-3 items-center flex-wrap">
           <input
@@ -98,14 +129,26 @@ export default function EventsPage() {
         </div>
 
         {/* Table */}
-        <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+        <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden flex-1 flex flex-col min-h-0">
+          <div className="flex items-center justify-between px-4 py-2 border-b border-gray-800 shrink-0">
+            <span className="text-xs text-gray-500">{total} events</span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500">Rows per page:</span>
+              <select value={limit} onChange={e => { setLimit(Number(e.target.value)); setPage(1); }}
+                className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-emerald-500">
+                {[15, 25, 50, 100].map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="overflow-auto flex-1 min-h-0">
           <table className="w-full text-sm">
-            <thead>
+            <thead className="sticky top-0 bg-gray-900 z-10">
               <tr className="border-b border-gray-800 text-left">
                 <th className="px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Profile</th>
                 <th className="px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Event Type</th>
                 <th className="px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Timestamp</th>
                 <th className="px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Status</th>
+                <th className="px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Source</th>
                 <th className="px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Channel</th>
                 <th className="px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Amount</th>
                 <th className="px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Confidence</th>
@@ -135,6 +178,7 @@ export default function EventsPage() {
                         {ev.status || "—"}
                       </span>
                     </td>
+                    <td className="px-4 py-3"><SourceBadge source={ev.ingest_source} /></td>
                     <td className="px-4 py-3 text-gray-400 text-xs">{ev.channel || "—"}</td>
                     <td className="px-4 py-3 text-gray-300 text-xs">{ev.amount ? `₹${ev.amount.toLocaleString()}` : "—"}</td>
                     <td className="px-4 py-3">
@@ -187,22 +231,17 @@ export default function EventsPage() {
               )}
             </tbody>
           </table>
+          </div>
         </div>
 
         {/* Pagination */}
         {pages > 1 && (
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-end gap-2">
             <span className="text-sm text-gray-500">Page {page} of {pages}</span>
-            <div className="flex gap-2">
-              <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
-                className="px-3 py-1.5 text-sm bg-gray-800 hover:bg-gray-700 disabled:opacity-40 rounded-lg transition-colors">
-                Previous
-              </button>
-              <button onClick={() => setPage(p => Math.min(pages, p + 1))} disabled={page === pages}
-                className="px-3 py-1.5 text-sm bg-gray-800 hover:bg-gray-700 disabled:opacity-40 rounded-lg transition-colors">
-                Next
-              </button>
-            </div>
+            <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
+              className="px-3 py-1.5 text-sm bg-gray-800 hover:bg-gray-700 disabled:opacity-40 rounded-lg transition-colors">Previous</button>
+            <button onClick={() => setPage(p => Math.min(pages, p + 1))} disabled={page === pages}
+              className="px-3 py-1.5 text-sm bg-gray-800 hover:bg-gray-700 disabled:opacity-40 rounded-lg transition-colors">Next</button>
           </div>
         )}
       </main>

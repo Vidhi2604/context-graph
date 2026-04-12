@@ -336,6 +336,7 @@ async function createRetailEvent(
       exception: $exception,
       confidence_score: $confidence,
       properties: $properties,
+      _ingest_source: $ingestSource,
       _tenant: $tenantId,
       created_at: datetime()
     })
@@ -354,6 +355,7 @@ async function createRetailEvent(
       exception: !!(event.properties as Record<string, unknown>)?.exception,
       confidence: (event.confidence_score as number) || 1.0,
       properties: JSON.stringify(event.properties || {}),
+      ingestSource: (event._ingest_source as string) || (event._source as string) || "csv_import",
     }
   );
 }

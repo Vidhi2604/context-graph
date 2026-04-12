@@ -45,10 +45,17 @@ export async function POST(req: NextRequest) {
     let eventsIngested = 0;
     let eventsFailed = 0;
 
+    // Tag source for all events
+    const ingestSource = connector_id
+      ? (await getConnector(session.tenantId, connector_id))?.type || type || "connector"
+      : type || "connector";
+
+    const taggedEvents = events.map(e => ({ ...e, _vertical: session.vertical, _ingest_source: ingestSource }));
+
     if (isStreamsConfigured()) {
-      for (const event of events) {
+      for (const event of taggedEvents) {
         try {
-          await produceToStream(session.tenantId, { ...event, _vertical: session.vertical });
+          await produceToStream(session.tenantId, event);
           eventsIngested++;
         } catch {
           eventsFailed++;
@@ -56,12 +63,7 @@ export async function POST(req: NextRequest) {
       }
       // Auto-drain the stream immediately after pushing
       try {
-        const result = await processEventsBatch(
-          events.map(e => ({ ...e, _vertical: session.vertical })),
-          session.tenantId,
-          session.orgId,
-          session.vertical
-        );
+        const result = await processEventsBatch(taggedEvents, session.tenantId, session.orgId, session.vertical);
         eventsIngested = result.processed;
         eventsFailed = result.failed;
       } catch (e) {
@@ -70,13 +72,8 @@ export async function POST(req: NextRequest) {
     } else {
       // Process events directly using the same logic as events/process
       try {
-        console.log(`[sync] calling processEventsBatch with ${events.length} events, tenant: ${session.tenantId}`);
-        const result = await processEventsBatch(
-          events.map(e => ({ ...e, _vertical: session.vertical })),
-          session.tenantId,
-          session.orgId,
-          session.vertical
-        );
+        console.log(`[sync] calling processEventsBatch with ${taggedEvents.length} events, tenant: ${session.tenantId}`);
+        const result = await processEventsBatch(taggedEvents, session.tenantId, session.orgId, session.vertical);
         eventsIngested = result.processed;
         eventsFailed = result.failed;
       } catch (e) {

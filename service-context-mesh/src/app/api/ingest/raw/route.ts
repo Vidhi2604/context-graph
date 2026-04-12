@@ -66,7 +66,8 @@ export async function POST(req: NextRequest) {
             const results = payloads.map(p => mapRawPayload(p, config, clientKey || "raw"));
             return results;
           })
-      : Promise.resolve(payloads.map(p => mapRawPayload(p, config, clientKey || "raw"))));
+      : Promise.resolve(payloads.map(p => mapRawPayload(p, config, clientKey || "raw"))))
+        .then(results => results.map(e => e ? { ...e, _ingest_source: clientKey || "api" } : e));
 
     const validEvents = mapped.filter(Boolean);
     const firstEvent = validEvents[0] as unknown as Record<string, unknown> | undefined;
@@ -91,11 +92,13 @@ export async function POST(req: NextRequest) {
     }
 
     const streamsConfigured = isStreamsConfigured();
+    // Force sync when request comes from import UI (?sync=true) or always for dashboard imports
+    const forceSync = req.nextUrl.searchParams.get("sync") === "true";
 
     let ingested = 0;
     let failed = 0;
 
-    if (streamsConfigured) {
+    if (streamsConfigured && !forceSync) {
       // Async via Kafka
       await (trace
         ? trace.run("Kafka Produce", "produceBatch()", "kafka",
@@ -118,43 +121,31 @@ export async function POST(req: NextRequest) {
             }
           })());
     } else {
-      // Sync fallback — process directly
-      await (trace
-        ? trace.run("Direct Processing (sync fallback)", "processEvents()", "neo4j",
-            `Kafka not configured — processing ${validEvents.length} events synchronously`,
-            async () => {
-              const baseUrl = `${req.nextUrl.protocol}//${req.nextUrl.host}`;
-              for (const event of validEvents) {
-                try {
-                  await fetch(`${baseUrl}/api/events/process`, {
-                    method: "POST",
-                    headers: {
-                      "Content-Type": "application/json",
-                      "x-org-id": session.orgId,
-                    },
-                    body: JSON.stringify({ events: [{ ...event, _vertical: session.vertical }] }),
-                  });
-                  ingested++;
-                } catch { failed++; }
-              }
-            })
-        : (async () => {
-            const baseUrl = `${req.nextUrl.protocol}//${req.nextUrl.host}`;
-            for (const event of validEvents) {
-              try {
-                await fetch(`${baseUrl}/api/events/process`, {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    "x-org-id": session.orgId,
-                    "x-cron-secret": process.env.CRON_SECRET || "dev",
-                  },
-                  body: JSON.stringify({ events: [{ ...event, _vertical: session.vertical }], tenantId: session.tenantId }),
-                });
-                ingested++;
-              } catch { failed++; }
-            }
-          })());
+      // Sync — process all events in one batch call
+      const baseUrl = `${req.nextUrl.protocol}//${req.nextUrl.host}`;
+      try {
+        const res = await fetch(`${baseUrl}/api/events/process`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-org-id": session.orgId,
+            "x-cron-secret": process.env.CRON_SECRET || "dev",
+          },
+          body: JSON.stringify({
+            events: validEvents.map(e => ({ ...e, _vertical: session.vertical })),
+            tenantId: session.tenantId,
+          }),
+        });
+        if (res.ok) {
+          const result = await res.json();
+          ingested = result.processed ?? validEvents.length;
+          failed = result.failed ?? 0;
+        } else {
+          failed = validEvents.length;
+        }
+      } catch {
+        failed = validEvents.length;
+      }
     }
 
     const response = {

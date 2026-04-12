@@ -139,6 +139,60 @@ export const NurixAdapter: ConnectorAdapter = {
     throw new Error("Nurix credentials not configured");
   },
 
+  async liveSearch(query: string, credentials: Record<string, string>): Promise<ContextMeshEvent[]> {
+    const apiUrl = credentials.api_url || process.env.NURIX_API_URL;
+    const workspaceId = credentials.workspace_id || credentials.api_key || process.env.NURIX_WORKSPACE_ID;
+    if (!apiUrl || !workspaceId) return [];
+
+    try {
+      const res = await fetch(`${apiUrl}/conversations/`, {
+        headers: { "workspace-id": workspaceId, "accept": "application/json" },
+      });
+      if (!res.ok) return [];
+
+      const data = await res.json();
+      const all: Record<string, unknown>[] = Array.isArray(data) ? data : data.conversations || data.data || [];
+      const q = query.toLowerCase();
+
+      // Filter conversations where any field contains the query
+      const matched = all.filter(c =>
+        String(c.user_id || "").toLowerCase().includes(q) ||
+        String(c.phone || "").includes(q) ||
+        String(c.customer_name || "").toLowerCase().includes(q)
+      ).slice(0, 10);
+
+      // Fetch phone for matched user_ids
+      const phoneMap: Record<string, string> = {};
+      await Promise.allSettled(matched.map(async (c) => {
+        const uid = String(c.user_id ?? "");
+        if (!uid) return;
+        const r = await fetch(`${apiUrl}/voice/users/${uid}`, {
+          headers: { "workspace-id": workspaceId, "Content-Type": "application/json" },
+        });
+        if (r.ok) {
+          const u = await r.json() as Record<string, string>;
+          const phone = u.decrypted_identifier || u.masked_identifier;
+          if (phone && u.identifier_type === "phone") phoneMap[uid] = phone;
+        }
+      }));
+
+      return matched.map(c => {
+        const userId = String(c.user_id ?? "");
+        const phone = phoneMap[userId] ?? null;
+        return {
+          event_type: "support_call",
+          identifiers: { user_id: userId, ...(phone ? { phone } : {}) },
+          profile_data: { ...(phone ? { phone } : {}) },
+          source: "nurix",
+          source_id: `nurix_conv_${c.id}`,
+          confidence_score: 0.9,
+          properties: { conversation_id: c.id, status: c.status, channel: c.source || "voice" },
+          timestamp: String(c.last_message_time || c.created_at || new Date().toISOString()),
+        } as ContextMeshEvent;
+      });
+    } catch { return []; }
+  },
+
   async testConnection(credentials: Record<string, string>) {
     const apiUrl = credentials.api_url || process.env.NURIX_API_URL;
     const workspaceId = credentials.workspace_id || credentials.api_key || process.env.NURIX_WORKSPACE_ID;

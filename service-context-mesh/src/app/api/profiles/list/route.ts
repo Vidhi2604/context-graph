@@ -33,7 +33,7 @@ export async function GET(req: NextRequest) {
       `MATCH (p:Profile {_tenant: $t})
        WHERE 1=1 ${whereSearch}
        OPTIONAL MATCH (p)-[:${eventRel}]->(e:${eventLabel} {_tenant: $t})
-       WITH p, count(e) AS event_count
+       WITH p, count(e) AS event_count, collect(DISTINCT e._ingest_source) AS sources
        RETURN
          p.profile_id AS profile_id,
          p.name AS name,
@@ -43,7 +43,8 @@ export async function GET(req: NextRequest) {
          p.tier AS tier,
          p.ltv AS ltv,
          p.created_at AS created_at,
-         event_count
+         event_count,
+         sources
        ORDER BY event_count DESC, p.created_at DESC
        SKIP toInteger($offset) LIMIT toInteger($limit)`,
       { t, search, offset, limit }

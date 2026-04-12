@@ -29,11 +29,14 @@ export async function POST(req: NextRequest) {
       data: { name, vertical, tenantId, apiKey },
     });
 
-    // Add creator as owner
+    // Add creator as owner — verify user exists first (guards against stale JWT from old DB)
     if (userId) {
-      await prisma.orgMember.create({
-        data: { userId, orgId: org.id, role: "owner" },
-      });
+      const userExists = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
+      if (userExists) {
+        await prisma.orgMember.create({
+          data: { userId, orgId: org.id, role: "owner" },
+        });
+      }
     }
 
     // Initialize Neo4j schema for this vertical (non-blocking)

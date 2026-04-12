@@ -3,8 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider     = "mysql"
+  url          = env("DATABASE_URL")
+  relationMode = "prisma"
 }
 
 model User {
@@ -82,10 +83,12 @@ model Connector {
   tenantId    String
   type        String
   name        String
-  credentials String
+  credentials String   // JSON string, encrypted in prod
   active      Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  @@index([tenantId])
 }
 
 model PasswordResetToken {
@@ -94,8 +97,13 @@ model PasswordResetToken {
   token     String   @unique
   expires   DateTime
   createdAt DateTime @default(now())
+
+  @@index([email])
 }
 
+// IdempotencyKey — prevents duplicate event processing from Kafka at-least-once delivery.
+// Key format: "{tenantId}:{eventType}:{sourceId}"
+// Cleaned by daily cron: DELETE WHERE expiresAt < now()
 model IdempotencyKey {
   id          String   @id @default(cuid())
   key         String
@@ -104,4 +112,17 @@ model IdempotencyKey {
   expiresAt   DateTime
 
   @@unique([key, tenantId])
+  @@index([tenantId, expiresAt])
+}
+
+model Webhook {
+  id        String   @id @default(cuid())
+  orgId     String
+  name      String
+  url       String   @db.Text
+  condition String   @db.Text
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@index([orgId])
 }

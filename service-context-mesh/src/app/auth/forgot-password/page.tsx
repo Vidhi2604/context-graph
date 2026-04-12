@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import Logo from "@/components/Logo";
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
@@ -35,9 +36,7 @@ export default function ForgotPasswordPage() {
     <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold">
-            <span className="text-emerald-400">Context</span>Mesh
-          </h1>
+          <div class="flex justify-center"><Logo size={36} /></div>
           <p className="text-gray-500 mt-2">Reset your password</p>
         </div>
 

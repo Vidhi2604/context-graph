@@ -1,5 +1,4 @@
 import { NextAuthOptions } from "next-auth";
-import GoogleProvider from "next-auth/providers/google";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import { prisma } from "./prisma";
@@ -8,10 +7,6 @@ import { createHash } from "crypto";
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma) as NextAuthOptions["adapter"],
   providers: [
-    GoogleProvider({
-      clientId: process.env.GOOGLE_CLIENT_ID || "",
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
-    }),
     CredentialsProvider({
       name: "Email",
       credentials: {
@@ -63,7 +58,9 @@ export const authOptions: NextAuthOptions = {
           // Then prefer higher plan
           const pa = PLAN_RANK[a.org.plan] || 0;
           const pb = PLAN_RANK[b.org.plan] || 0;
-          return pb - pa;
+          if (pb !== pa) return pb - pa;
+          // Tiebreaker: most recently created
+          return new Date(b.org.createdAt).getTime() - new Date(a.org.createdAt).getTime();
         })[0];
 
         if (best) {

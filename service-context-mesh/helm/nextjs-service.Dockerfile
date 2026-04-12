@@ -13,7 +13,7 @@ COPY . .
 
 # Install ALL deps (including devDeps needed for build: tailwindcss, postcss, etc.)
 RUN npm ci --include=dev
-RUN npx prisma generate
+RUN cp prisma/schema.prod.prisma prisma/schema.prisma && npx prisma generate
 RUN npm run build
 
 # Copy static assets into standalone output (required for CSS/JS to be served)

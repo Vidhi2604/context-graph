@@ -38,6 +38,7 @@ interface Props {
   orgId: string;
   resetKey?: number;
   onClose: () => void;
+  onWidthChange?: (width: number) => void;
 }
 
 // Group entries into "pipelines" — bursts of activity within 5s of each other
@@ -69,27 +70,8 @@ function groupIntoPipelines(entries: ActivityEntry[]): Pipeline[] {
   return pipelines.reverse(); // newest first
 }
 
-// Within a pipeline, find parallel steps (overlapping timestamps)
-function buildRows(entries: ActivityEntry[]): ActivityEntry[][] {
-  const sorted = [...entries].sort((a, b) => a.started_at - b.started_at);
-  const rows: ActivityEntry[][] = [];
 
-  for (const entry of sorted) {
-    // Find a row where last entry has ended before this one starts
-    const rowIdx = rows.findIndex(row => {
-      const last = row[row.length - 1];
-      return !last.ended_at || last.ended_at <= entry.started_at;
-    });
-    if (rowIdx === -1) {
-      rows.push([entry]);
-    } else {
-      rows[rowIdx].push(entry);
-    }
-  }
-  return rows;
-}
-
-export default function ActivityPanel({ orgId, resetKey, onClose }: Props) {
+export default function ActivityPanel({ orgId, resetKey, onClose, onWidthChange }: Props) {
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
   const [width, setWidth] = useState(460);
   const isDragging = useRef(false);
@@ -108,7 +90,9 @@ export default function ActivityPanel({ orgId, resetKey, onClose }: Props) {
     const onMouseMove = (e: MouseEvent) => {
       if (!isDragging.current) return;
       const delta = startX.current - e.clientX;
-      setWidth(Math.max(320, Math.min(900, startWidth.current + delta)));
+      const newWidth = Math.max(320, Math.min(900, startWidth.current + delta));
+      setWidth(newWidth);
+      onWidthChange?.(newWidth);
     };
     const onMouseUp = () => { isDragging.current = false; };
     document.addEventListener("mousemove", onMouseMove);
@@ -218,8 +202,6 @@ export default function ActivityPanel({ orgId, resetKey, onClose }: Props) {
 }
 
 function PipelineBlock({ pipeline }: { pipeline: Pipeline }) {
-  const rows = buildRows(pipeline.entries);
-  const isParallel = rows.length > 1;
   const time = new Date(pipeline.startedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
   return (
@@ -227,23 +209,10 @@ function PipelineBlock({ pipeline }: { pipeline: Pipeline }) {
       {/* Timestamp */}
       <div className="text-xs text-gray-600 font-mono mb-1">{time}</div>
 
-      {isParallel ? (
-        // Branching layout
-        <div className="flex gap-2 relative">
-          {/* Vertical join lines */}
-          <div className="absolute left-0 top-0 bottom-0 w-px bg-gray-800" />
-          {rows.map((row, ri) => (
-            <div key={ri} className="flex-1 space-y-0.5 pl-2">
-              {row.map(entry => <EntryCard key={entry.id} entry={entry} />)}
-            </div>
-          ))}
-        </div>
-      ) : (
-        // Linear layout
-        <div className="space-y-0.5">
-          {rows[0]?.map(entry => <EntryCard key={entry.id} entry={entry} />)}
-        </div>
-      )}
+      {/* Always single column, scrollable */}
+      <div className="space-y-0.5">
+        {pipeline.entries.map(entry => <EntryCard key={entry.id} entry={entry} />)}
+      </div>
     </div>
   );
 }

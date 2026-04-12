@@ -4,22 +4,22 @@ import { useState } from "react";
 import { signIn } from "next-auth/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import Logo from "@/components/Logo";
 
 export default function SignUpPage() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState<"idle" | "creating" | "signing_in" | "redirecting">("idle");
   const [error, setError] = useState("");
   const router = useRouter();
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
+    setStatus("creating");
     setError("");
 
     try {
-      // Create user
       const res = await fetch("/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -29,33 +29,39 @@ export default function SignUpPage() {
       if (!res.ok) {
         const data = await res.json();
         setError(data.error || "Sign up failed");
+        setStatus("idle");
         return;
       }
 
-      // Auto sign in
-      const result = await signIn("credentials", {
-        email, password, redirect: false,
-      });
+      setStatus("signing_in");
+      const result = await signIn("credentials", { email, password, redirect: false });
 
       if (result?.error) {
         setError("Account created but sign in failed. Please sign in manually.");
+        setStatus("idle");
       } else {
+        setStatus("redirecting");
+        router.refresh();
         router.push("/onboarding");
       }
     } catch {
       setError("Something went wrong. Please try again.");
-    } finally {
-      setLoading(false);
+      setStatus("idle");
     }
   };
+
+  const loading = status !== "idle";
+  const buttonLabel =
+    status === "creating" ? "Creating account..." :
+    status === "signing_in" ? "Signing in..." :
+    status === "redirecting" ? "Redirecting..." :
+    "Create Account";
 
   return (
     <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold">
-            <span className="text-emerald-400">Context</span>Mesh
-          </h1>
+          <div class="flex justify-center"><Logo size={36} /></div>
           <p className="text-gray-500 mt-2">Create your account</p>
         </div>
 
@@ -103,9 +109,15 @@ export default function SignUpPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 py-3 rounded-xl font-medium transition-colors"
+              className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 py-3 rounded-xl font-medium transition-colors flex items-center justify-center gap-2"
             >
-              {loading ? "Creating account..." : "Create Account"}
+              {loading && (
+                <svg className="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                </svg>
+              )}
+              {buttonLabel}
             </button>
           </form>
 
