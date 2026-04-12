@@ -3,7 +3,6 @@ import { randomBytes } from "crypto";
 import { prisma } from "@/lib/prisma";
 import { Resend } from "resend";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
 const FROM_EMAIL = process.env.EMAIL_FROM || "onboarding@resend.dev";
 const APP_URL = process.env.NEXTAUTH_URL || "http://localhost:3000";
 
@@ -30,6 +29,7 @@ export async function POST(req: NextRequest) {
 
     const resetUrl = `${APP_URL}/auth/reset-password?token=${token}`;
 
+    const resend = new Resend(process.env.RESEND_API_KEY);
     await resend.emails.send({
       from: FROM_EMAIL,
       to: email,
