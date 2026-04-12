@@ -51,3 +51,12 @@ resources:
     cpu: "500m"
 
 replicaCount: 1
+
+vpnIngress:
+  enabled: false
+
+wssIngress:
+  enabled: false
+
+internalIngress:
+  enabled: false
