@@ -38,3 +38,9 @@ wssIngress:
 
 internalIngress:
   enabled: false
+
+serviceMonitor:
+  enabled: false
+
+podMonitor:
+  enabled: false
