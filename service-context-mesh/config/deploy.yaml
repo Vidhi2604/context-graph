@@ -60,3 +60,15 @@ wssIngress:
 
 internalIngress:
   enabled: false
+
+serviceMonitor:
+  enabled: false
+
+podMonitor:
+  enabled: false
+
+configMap:
+  enabled: false
+
+secret:
+  enabled: false
