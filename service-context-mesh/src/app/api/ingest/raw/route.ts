@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getOrgFromRequest, errorResponse } from "@/lib/api-auth";
 import { getConfig } from "@/lib/ingest-configs";
 import { mapRawPayload } from "@/lib/raw-mapper";
+import { normalizePayload } from "@/lib/payload-normalizer";
 import { produceToStream, isStreamsConfigured } from "@/lib/streams";
 import { TraceCollector } from "@/lib/trace";
 import { logActivity, completeActivity } from "@/lib/activity-log";
@@ -41,9 +42,9 @@ export async function POST(req: NextRequest) {
           async () => getConfig(clientKey))
       : Promise.resolve(getConfig(clientKey)));
 
-    // Parse body — accept single object or array
+    // Parse body — normalize ANY shape into flat array of events
     const body = await req.json();
-    const payloads: Record<string, unknown>[] = Array.isArray(body) ? body : [body];
+    const payloads: Record<string, unknown>[] = normalizePayload(body);
 
     if (payloads.length === 0) {
       return NextResponse.json({ error: "Empty payload" }, { status: 400 });

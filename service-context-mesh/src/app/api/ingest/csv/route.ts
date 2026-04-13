@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getOrgFromRequest, errorResponse } from "@/lib/api-auth";
 import { mapRawPayload } from "@/lib/raw-mapper";
+import { normalizePayload } from "@/lib/payload-normalizer";
 import { getConfig } from "@/lib/ingest-configs";
 
 function parseCSV(text: string): Record<string, string>[] {
@@ -86,6 +87,24 @@ export async function POST(req: NextRequest) {
       const body = await req.json();
       if (body.sheet_url) {
         csvText = await fetchGoogleSheet(body.sheet_url);
+        // preview_only — return just the column names
+        if (body.preview_only) {
+          const rows = parseCSV(csvText);
+          const columns = Object.keys(rows[0] || {});
+          return NextResponse.json({ columns });
+        }
+        // Apply column mapping if provided
+        if (body.column_mapping) {
+          const rows = parseCSV(csvText);
+          const remapped = rows.map((row: Record<string, unknown>) => {
+            const result = { ...row };
+            for (const [ourKey, theirKey] of Object.entries(body.column_mapping as Record<string, string>)) {
+              if (theirKey && row[theirKey] !== undefined) result[ourKey] = row[theirKey];
+            }
+            return result;
+          });
+          csvText = [Object.keys(remapped[0]).join(","), ...remapped.map((r: Record<string, unknown>) => Object.values(r).map(v => String(v ?? "")).join(","))].join("\n");
+        }
       } else if (body.csv_text) {
         csvText = body.csv_text;
       } else {
@@ -93,19 +112,43 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const rows = parseCSV(csvText);
+    let rows = parseCSV(csvText);
     if (rows.length === 0) {
       return NextResponse.json({ error: "No data rows found in CSV" }, { status: 400 });
     }
 
+    // Apply column mapping if provided (works for file, text, and sheets)
+    let columnMapping: Record<string, string> | null = null;
+    if (req.headers.get("content-type")?.includes("multipart")) {
+      // Already handled above for file uploads
+    } else {
+      try {
+        const body = await req.clone().json().catch(() => ({}));
+        columnMapping = body.column_mapping || null;
+      } catch { /* no body */ }
+    }
+
+    if (columnMapping) {
+      rows = rows.map(row => {
+        const result = { ...row };
+        for (const [ourKey, theirKey] of Object.entries(columnMapping!)) {
+          if (theirKey && row[theirKey] !== undefined) result[ourKey] = row[theirKey];
+        }
+        return result;
+      });
+    }
+
     const config = getConfig(undefined);
-    const mapped = rows.map(r => mapRawPayload(r, config, "csv")).filter(Boolean).map(e => ({ ...e, _ingest_source: "csv_import" }));
+    // Run each CSV row through normalizePayload first (alias normalization, nested surfacing)
+    // then through mapRawPayload for full identity/event extraction
+    const normalizedRows = rows.flatMap(r => normalizePayload(r));
+    const mapped = normalizedRows.map(r => mapRawPayload(r, config, "csv")).filter(Boolean).map(e => ({ ...e, _ingest_source: "csv_import" }));
 
     if (mapped.length === 0) {
       return NextResponse.json({
         error: "Could not extract any identifiers from CSV. Make sure columns include email, phone, user_id, or similar.",
         columns_found: Object.keys(rows[0] || {}),
-        hint: "Rename your columns to: email, phone, name, event_type, amount, status",
+        hint: "Any column name works — we auto-detect email, phone, name and common aliases.",
       }, { status: 422 });
     }
 

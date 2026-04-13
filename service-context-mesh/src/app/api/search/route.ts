@@ -151,7 +151,11 @@ export async function POST(req: NextRequest) {
       profileIds = await applyFilters(profileIds, activeFilters, session.tenantId, session.vertical);
     }
 
-    // If filters were applied and returned 0 profiles — respect that (don't fall back to unfiltered)
+    // If LLM Cypher returned 0 profiles and no filters — fall back to basic search
+    if (profileIds.length === 0 && !filtersApplied) {
+      return handleBasicSearch(parsed.data.query, session.tenantId, vertical, trace, Math.floor(Math.min(parsed.data.limit, plan.maxGraphNodes === Infinity ? 200 : plan.maxGraphNodes)));
+    }
+
     const eventTypeFilter = activeFilters["eventType"] || activeFilters["event_type"] || activeFilters["Event Type"] || [];
     const contextRecords = profileIds.length > 0
       ? await (trace
@@ -159,9 +163,7 @@ export async function POST(req: NextRequest) {
               `expanding ${profileIds.length} profiles${filtersApplied ? " (filtered)" : ""}`,
               () => expandProfileContext(profileIds, session.tenantId, session.vertical, eventTypeFilter))
           : expandProfileContext(profileIds, session.tenantId, session.vertical, eventTypeFilter))
-      : filtersApplied
-        ? [] // filters returned 0 results — show empty graph
-        : primaryRecords;
+      : [];
 
     const records = contextRecords.length > 0 ? contextRecords : filtersApplied ? [] : primaryRecords;
 
@@ -462,6 +464,7 @@ async function addRedisTrace(trace: TraceCollector, tenantId: string) {
 }
 
 async function runBasicSearch(query: string, tenantId: string, limit = 25) {
+  limit = Math.floor(limit);
   // Try name match first
   const nameRecords = await runQuery(
     `
@@ -472,7 +475,7 @@ async function runBasicSearch(query: string, tenantId: string, limit = 25) {
          MATCH (p)-[:HAS_IDENTITY]->(i:Identity {_tenant: $tenantId})
          WHERE toLower(i.value) CONTAINS toLower($query)
        }
-    WITH DISTINCT p LIMIT $limit
+    WITH DISTINCT p LIMIT toInteger($limit)
     OPTIONAL MATCH path = (p)-[r]-(connected)
     WHERE connected._tenant = $tenantId
     RETURN p, r, connected, path
@@ -486,7 +489,7 @@ async function runBasicSearch(query: string, tenantId: string, limit = 25) {
   return runQuery(
     `
     MATCH (p:Profile {_tenant: $tenantId})
-    WITH p LIMIT $limit
+    WITH p LIMIT toInteger($limit)
     OPTIONAL MATCH path = (p)-[r]-(connected)
     WHERE connected._tenant = $tenantId
     RETURN p, r, connected, path

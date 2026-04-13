@@ -9,6 +9,35 @@
 
 import { IngestConfig, DEFAULT_CONFIG } from "./ingest-configs";
 
+/**
+ * Recursively flattens a nested object into dot-notation keys AND
+ * also keeps all leaf values accessible at the top level with their last key segment.
+ * e.g. { product: { name: "X", specs: { color: "red" } } }
+ * → { "product.name": "X", "product.specs.color": "red", "product_name": "X", "color": "red" }
+ * This lets any field at any nesting depth be found by the mapper.
+ */
+function flattenPayload(obj: Record<string, unknown>, prefix = ""): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(obj)) {
+    const dotKey = prefix ? `${prefix}.${key}` : key;
+    const flatKey = prefix ? `${prefix}_${key}` : key;
+    if (val !== null && typeof val === "object" && !Array.isArray(val)) {
+      const nested = flattenPayload(val as Record<string, unknown>, dotKey);
+      Object.assign(result, nested);
+      // Also add underscore-joined version
+      const nestedFlat = flattenPayload(val as Record<string, unknown>, flatKey);
+      Object.assign(result, nestedFlat);
+      // Keep the last segment accessible directly (e.g. "name" from "product.name")
+      result[key] = result[key] ?? val; // don't overwrite if already at top level
+    } else {
+      result[dotKey] = val;
+      result[flatKey] = val;
+      result[key] = result[key] ?? val; // keep shorter key if not already set
+    }
+  }
+  return result;
+}
+
 // Common field name aliases to try when config field is missing
 const IDENTIFIER_ALIASES = [
   // email
@@ -166,16 +195,19 @@ export function mapRawPayload(
   config: IngestConfig = DEFAULT_CONFIG,
   source: string = "raw"
 ): MappedEvent | null {
+  // Flatten nested payload so any field at any depth is accessible
+  const flat = { ...flattenPayload(payload), ...payload };
+
   // Extract identifiers — at least one required
-  const identifiers = extractIdentifiers(payload, config);
+  const identifiers = extractIdentifiers(flat, config);
   if (Object.keys(identifiers).length === 0) return null;
 
   // Extract event type
-  const event_type = extractEventType(payload, config);
+  const event_type = extractEventType(flat, config);
 
   // Extract timestamp
   const tsFields = [config.timestamp_field, ...TIMESTAMP_ALIASES].filter(Boolean) as string[];
-  const rawTs = tryFields(payload, tsFields);
+  const rawTs = tryFields(flat, tsFields);
   let timestamp: string | undefined;
   if (rawTs) {
     try {
@@ -187,34 +219,47 @@ export function mapRawPayload(
 
   // Extract amount
   const amtFields = [config.amount_field, ...AMOUNT_ALIASES].filter(Boolean) as string[];
-  const rawAmt = tryFields(payload, amtFields);
+  const rawAmt = tryFields(flat, amtFields);
   const amount = rawAmt ? parseFloat(String(rawAmt)) : undefined;
 
   // Extract channel
   const chFields = [config.channel_field, ...CHANNEL_ALIASES].filter(Boolean) as string[];
-  const channel = String(tryFields(payload, chFields) || "api");
+  const channel = String(tryFields(flat, chFields) || "api");
 
-  // Extract product fields (retail)
+  // Extract product fields (retail) — also checks nested product object
   let product: Record<string, unknown> | undefined;
+  const nestedProduct = typeof flat.product === "object" && payload.product !== null
+    ? flat.product as Record<string, unknown>
+    : null;
   if (config.product_fields) {
     const pf = config.product_fields;
-    const pName = pf.name ? payload[pf.name] : tryFields(payload, ["product_name", "item_name", "product", "item"]);
+    const pName = pf.name ? flat[pf.name]
+      : tryFields(flat, ["product_name", "item_name"])
+      || nestedProduct?.name;
     if (pName) {
       product = {
         name: pName,
-        brand: pf.brand ? payload[pf.brand] : tryFields(payload, ["brand", "brand_name"]),
-        category: pf.category ? payload[pf.category] : tryFields(payload, ["category", "department"]),
-        price: pf.price ? payload[pf.price] : amount,
-        product_id: pf.id ? payload[pf.id] : tryFields(payload, ["product_id", "item_id", "sku"]),
+        brand: pf.brand ? flat[pf.brand] : tryFields(flat, ["brand", "brand_name"]) || nestedProduct?.brand,
+        category: pf.category ? flat[pf.category] : tryFields(flat, ["category", "department"]) || nestedProduct?.category,
+        price: pf.price ? flat[pf.price] : amount,
+        product_id: pf.id ? flat[pf.id] : tryFields(flat, ["product_id", "item_id", "sku"]) || nestedProduct?.id,
       };
     }
+  } else if (nestedProduct?.name) {
+    // No config but nested product object present — use it directly
+    product = {
+      name: nestedProduct.name,
+      category: nestedProduct.category,
+      product_id: nestedProduct.id || nestedProduct.product_id,
+      price: amount,
+    };
   }
 
   // Extract provider fields (healthcare)
   let provider: Record<string, unknown> | undefined;
   if (config.provider_fields) {
     const pf = config.provider_fields;
-    const pName = pf.name ? payload[pf.name] : tryFields(payload, [
+    const pName = pf.name ? flat[pf.name] : tryFields(flat, [
       "doctor_name", "doctor", "provider_name", "physician", "doc",
       "doctor_assigned", "specialist", "surgeon", "assigned_to",
       "attending", "treating_dr", "treating_physician", "physician_name",
@@ -222,9 +267,9 @@ export function mapRawPayload(
     if (pName) {
       provider = {
         name: pName,
-        provider_id: pf.id ? payload[pf.id] : tryFields(payload, ["doctor_id", "provider_id"]),
-        specialization: pf.specialization ? payload[pf.specialization] : tryFields(payload, ["specialty", "specialization"]),
-        department: pf.department ? payload[pf.department] : tryFields(payload, ["department", "dept"]),
+        provider_id: pf.id ? flat[pf.id] : tryFields(flat, ["doctor_id", "provider_id"]),
+        specialization: pf.specialization ? flat[pf.specialization] : tryFields(flat, ["specialty", "specialization"]),
+        department: pf.department ? flat[pf.department] : tryFields(flat, ["department", "dept"]),
       };
     }
   }
@@ -233,38 +278,38 @@ export function mapRawPayload(
   let diagnosis: Record<string, unknown> | undefined;
   if (config.diagnosis_fields) {
     const df = config.diagnosis_fields;
-    const dName = df.name ? payload[df.name] : tryFields(payload, ["diagnosis", "condition", "disease"]);
+    const dName = df.name ? flat[df.name] : tryFields(flat, ["diagnosis", "condition", "disease"]);
     if (dName) {
       diagnosis = {
         name: dName,
-        icd_code: df.icd_code ? payload[df.icd_code] : tryFields(payload, ["icd_code", "icd", "diagnosis_code"]),
-        severity: df.severity ? payload[df.severity] : tryFields(payload, ["severity", "priority"]),
+        icd_code: df.icd_code ? flat[df.icd_code] : tryFields(flat, ["icd_code", "icd", "diagnosis_code"]),
+        severity: df.severity ? flat[df.severity] : tryFields(flat, ["severity", "priority"]),
       };
     }
   }
 
   // Profile data (name, city, tier etc.)
   const profile_data: Record<string, unknown> = {};
-  const nameVal = tryFields(payload, [
+  const nameVal = tryFields(flat, [
     "name", "full_name", "customer_name", "patient_name", "user_name",
     "patient_nm", "nm", "pt_name", "person_name", "account_holder",
     "buyer", "client_name", "consumer_name", "subject", "username",
     "user_full_name",
   ]);
   if (nameVal) profile_data.name = nameVal;
-  const cityVal = tryFields(payload, ["city", "location", "region", "state", "area", "loc", "buyer_city", "client_city", "pincode"]);
+  const cityVal = tryFields(flat, ["city", "location", "region", "state", "area", "loc", "buyer_city", "client_city", "pincode"]);
   if (cityVal) profile_data.city = cityVal;
-  const tierVal = tryFields(payload, ["tier", "membership", "plan", "segment", "loyalty_tier"]);
+  const tierVal = tryFields(flat, ["tier", "membership", "plan", "segment", "loyalty_tier"]);
   if (tierVal) profile_data.tier = tierVal;
-  const ageVal = tryFields(payload, ["age", "patient_age"]);
+  const ageVal = tryFields(flat, ["age", "patient_age"]);
   if (ageVal) profile_data.age = ageVal;
-  const genderVal = tryFields(payload, ["gender", "sex"]);
+  const genderVal = tryFields(flat, ["gender", "sex"]);
   if (genderVal) profile_data.gender = genderVal;
 
   // Auto-extract visit context for healthcare-like payloads
-  const visitDept = tryFields(payload, ["dept", "department", "ward", "ward_no", "discharge_ward", "dept_code"]);
-  const visitPriority = tryFields(payload, ["priority", "priority_level", "urgency", "severity"]);
-  const visitType = tryFields(payload, ["visit_type", "case_type", "admission", "appointment_type", "service_type", "event_kind", "consultation"]);
+  const visitDept = tryFields(flat, ["dept", "department", "ward", "ward_no", "discharge_ward", "dept_code"]);
+  const visitPriority = tryFields(flat, ["priority", "priority_level", "urgency", "severity"]);
+  const visitType = tryFields(flat, ["visit_type", "case_type", "admission", "appointment_type", "service_type", "event_kind", "consultation"]);
   if (visitDept || visitPriority || visitType) {
     (provider as Record<string, unknown> | undefined) = provider || {};
     // Store visit metadata in properties for process route to use
@@ -275,7 +320,7 @@ export function mapRawPayload(
 
   // Source ID for idempotency
   const source_id = String(
-    tryFields(payload, ["id", "event_id", "order_id", "ticket_id", "visit_id", "transaction_id"]) || ""
+    tryFields(flat, ["id", "event_id", "order_id", "ticket_id", "visit_id", "transaction_id"]) || ""
   ) || undefined;
 
   // Confidence: higher if we found identifier + event_type from config fields

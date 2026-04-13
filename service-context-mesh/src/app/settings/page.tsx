@@ -162,7 +162,7 @@ export default function SettingsPage() {
         <ConnectorsSection orgId={orgId} />
 
         {/* CSV / Google Sheets Import */}
-        <CSVImportSection orgId={orgId} />
+        <CSVImportSection orgId={orgId} vertical={vertical} />
 
         {/* Webhooks */}
         <WebhooksSection orgId={orgId} />
@@ -442,7 +442,84 @@ function ConnectorsSection({ orgId }: { orgId: string }) {
 
 type ImportTab = "json" | "csv" | "sheets";
 
-function CSVImportSection({ orgId }: { orgId: string }) {
+const COMMON_FIELDS = [
+  { key: "email",      label: "Email",       required: true  },
+  { key: "name",       label: "Name",        required: false },
+  { key: "phone",      label: "Phone",       required: false },
+  { key: "event_type", label: "Event Type",  required: false },
+  { key: "status",     label: "Status",      required: false },
+  { key: "timestamp",  label: "Timestamp",   required: false },
+  { key: "channel",    label: "Channel",     required: false },
+];
+
+const VERTICAL_FIELDS: Record<string, { key: string; label: string; required: boolean }[]> = {
+  retail: [
+    { key: "amount",        label: "Order Amount",    required: false },
+    { key: "order_id",      label: "Order ID",        required: false },
+    { key: "product_name",  label: "Product Name",    required: false },
+    { key: "category",      label: "Category",        required: false },
+    { key: "brand",         label: "Brand",           required: false },
+    { key: "location",      label: "Location / City", required: false },
+  ],
+  healthcare: [
+    { key: "patient_id",    label: "Patient ID",      required: false },
+    { key: "mrn",           label: "MRN",             required: false },
+    { key: "department",    label: "Department",      required: false },
+    { key: "doctor_name",   label: "Doctor Name",     required: false },
+    { key: "diagnosis",     label: "Diagnosis",       required: false },
+    { key: "severity",      label: "Severity",        required: false },
+    { key: "visit_type",    label: "Visit Type",      required: false },
+    { key: "age",           label: "Age",             required: false },
+    { key: "gender",        label: "Gender",          required: false },
+  ],
+  cx: [
+    { key: "ticket_id",     label: "Ticket ID",       required: false },
+    { key: "agent_name",    label: "Agent Name",      required: false },
+    { key: "sentiment",     label: "Sentiment",       required: false },
+    { key: "resolution",    label: "Resolution",      required: false },
+    { key: "duration",      label: "Duration",        required: false },
+    { key: "amount",        label: "Amount",          required: false },
+  ],
+};
+
+function extractKeys(data: unknown, depth = 0): string[] {
+  if (depth > 3) return [];
+  if (Array.isArray(data) && data.length > 0) return extractKeys(data[0], depth);
+  if (data && typeof data === "object") {
+    const keys: string[] = [];
+    for (const [k, v] of Object.entries(data as Record<string, unknown>)) {
+      keys.push(k);
+      if (v && typeof v === "object" && !Array.isArray(v)) {
+        extractKeys(v, depth + 1).forEach(sk => keys.push(`${k}.${sk}`));
+      }
+    }
+    return Array.from(new Set(keys));
+  }
+  return [];
+}
+
+function applyMapping(data: unknown, mapping: Record<string, string>): unknown {
+  const remap = (obj: Record<string, unknown>): Record<string, unknown> => {
+    const result: Record<string, unknown> = { ...obj };
+    for (const [ourKey, theirKey] of Object.entries(mapping)) {
+      if (!theirKey) continue;
+      // Support dot notation: "personal.contact.email"
+      const parts = theirKey.split(".");
+      let val: unknown = obj;
+      for (const part of parts) {
+        val = (val as Record<string, unknown>)?.[part];
+      }
+      if (val !== undefined) result[ourKey] = val;
+    }
+    return result;
+  };
+  if (Array.isArray(data)) return data.map(item => remap(item as Record<string, unknown>));
+  if (data && typeof data === "object") return remap(data as Record<string, unknown>);
+  return data;
+}
+
+function CSVImportSection({ orgId, vertical = "retail" }: { orgId: string; vertical?: string }) {
+  const ourFields = [...COMMON_FIELDS, ...(VERTICAL_FIELDS[vertical] || VERTICAL_FIELDS.retail)];
   const [tab, setTab] = useState<ImportTab>("csv");
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -450,8 +527,34 @@ function CSVImportSection({ orgId }: { orgId: string }) {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState("");
+  const [detectedKeys, setDetectedKeys] = useState<string[]>([]);
+  const [mapping, setMapping] = useState<Record<string, string>>({});
+  const [showMapping, setShowMapping] = useState(false);
 
-  const reset = () => { setText(""); setFile(null); setSheetUrl(""); setError(""); setResult(null); };
+  const reset = () => {
+    setText(""); setFile(null); setSheetUrl(""); setError(""); setResult(null);
+    setDetectedKeys([]); setMapping({}); setShowMapping(false);
+  };
+
+  // Auto-detect keys when JSON text changes
+  const handleTextChange = (val: string) => {
+    setText(val);
+    if (tab === "json" && val.trim()) {
+      try {
+        const parsed = JSON.parse(val);
+        const keys = extractKeys(parsed);
+        setDetectedKeys(keys);
+        // Auto-map exact matches
+        const autoMap: Record<string, string> = {};
+        for (const field of ourFields) {
+          const match = keys.find(k => k.toLowerCase() === field.key || k.toLowerCase().endsWith(`.${field.key}`));
+          if (match) autoMap[field.key] = match;
+        }
+        setMapping(autoMap);
+        setShowMapping(keys.length > 0);
+      } catch { setDetectedKeys([]); setShowMapping(false); }
+    }
+  };
 
   const handleImport = async () => {
     setLoading(true); setError(""); setResult(null);
@@ -460,28 +563,34 @@ function CSVImportSection({ orgId }: { orgId: string }) {
       if (tab === "json") {
         let payload: unknown;
         try { payload = JSON.parse(text); } catch { setError("Invalid JSON"); setLoading(false); return; }
+        // Apply field mapping if user configured it
+        const hasMappings = Object.values(mapping).some(v => v);
+        if (hasMappings) payload = applyMapping(payload, mapping);
         res = await fetch("/api/ingest/raw", {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-org-id": orgId },
-          body: JSON.stringify(Array.isArray(payload) ? payload : [payload]),
+          body: JSON.stringify(payload),
         });
       } else if (tab === "csv") {
+        const hasMappings = Object.values(mapping).some(v => v);
         if (file) {
           const form = new FormData();
           form.append("file", file);
+          if (hasMappings) form.append("column_mapping", JSON.stringify(mapping));
           res = await fetch("/api/ingest/csv", { method: "POST", headers: { "x-org-id": orgId }, body: form });
         } else {
           res = await fetch("/api/ingest/csv", {
             method: "POST",
             headers: { "Content-Type": "application/json", "x-org-id": orgId },
-            body: JSON.stringify({ csv_text: text }),
+            body: JSON.stringify({ csv_text: text, column_mapping: hasMappings ? mapping : undefined }),
           });
         }
       } else {
+        const hasMappings = Object.values(mapping).some(v => v);
         res = await fetch("/api/ingest/csv", {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-org-id": orgId },
-          body: JSON.stringify({ sheet_url: sheetUrl }),
+          body: JSON.stringify({ sheet_url: sheetUrl, column_mapping: hasMappings ? mapping : undefined }),
         });
       }
       const data = await res.json();
@@ -510,10 +619,44 @@ function CSVImportSection({ orgId }: { orgId: string }) {
       {tab === "csv" && (
         <div className="space-y-3">
           <label className="block border-2 border-dashed border-gray-700 rounded-xl p-5 text-center cursor-pointer hover:border-emerald-600 transition-colors">
-            <input type="file" accept=".csv" className="hidden" onChange={e => { setFile(e.target.files?.[0] || null); setText(""); }} />
+            <input type="file" accept=".csv" className="hidden" onChange={e => {
+              const f = e.target.files?.[0] || null;
+              setFile(f); setText("");
+              if (f) {
+                const reader = new FileReader();
+                reader.onload = ev => {
+                  const content = ev.target?.result as string ?? "";
+                  const firstLine = content.split("\n")[0] || "";
+                  const cols = firstLine.split(",").map(c => c.trim().replace(/^"|"$/g, ""));
+                  setDetectedKeys(cols);
+                  const autoMap: Record<string, string> = {};
+                  for (const field of ourFields) {
+                    const match = cols.find(k => k.toLowerCase() === field.key || k.toLowerCase().includes(field.key));
+                    if (match) autoMap[field.key] = match;
+                  }
+                  setMapping(autoMap);
+                  setShowMapping(true);
+                };
+                reader.readAsText(f);
+              }
+            }} />
             {file ? <span className="text-sm text-emerald-400">{file.name}</span> : <span className="text-sm text-gray-500">Click to upload .csv file</span>}
           </label>
-          {!file && <textarea value={text} onChange={e => setText(e.target.value)} rows={4} placeholder={"email,name,event\nuser@example.com,Priya,purchase"} className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-sm font-mono text-white placeholder:text-gray-600 focus:outline-none focus:border-emerald-500 resize-none" />}
+          {!file && <textarea value={text} onChange={e => {
+            setText(e.target.value);
+            const firstLine = e.target.value.split("\n")[0] || "";
+            if (firstLine.includes(",")) {
+              const cols = firstLine.split(",").map(c => c.trim().replace(/^"|"$/g, ""));
+              setDetectedKeys(cols);
+              const autoMap: Record<string, string> = {};
+              for (const field of ourFields) {
+                const match = cols.find(k => k.toLowerCase() === field.key || k.toLowerCase().includes(field.key));
+                if (match) autoMap[field.key] = match;
+              }
+              setMapping(autoMap);
+              setShowMapping(cols.length > 1);
+            }
+          }} rows={4} placeholder={"email,name,event\nuser@example.com,Priya,purchase"} className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-sm font-mono text-white placeholder:text-gray-600 focus:outline-none focus:border-emerald-500 resize-none" />}
         </div>
       )}
 
@@ -540,16 +683,77 @@ function CSVImportSection({ orgId }: { orgId: string }) {
               {email:"aisha.khan@example.com",name:"Aisha Khan",phone:"+91-9712345678",event_type:"purchase",order_id:"ORD-002",amount:1299,status:"completed",channel:"web",location:"Bangalore",timestamp:"2026-04-03T11:00:00Z"}
             ],null,2))} className="text-xs text-emerald-400 hover:underline">Load example</button>
               </div>
-              <textarea value={text} onChange={e => setText(e.target.value)} rows={4} placeholder={'[{"email":"user@example.com","event":"purchase"}]'} className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-sm font-mono text-white placeholder:text-gray-600 focus:outline-none focus:border-emerald-500 resize-none" />
+              <textarea value={text} onChange={e => handleTextChange(e.target.value)} rows={4} placeholder={'[{"email":"user@example.com","event":"purchase"}]'} className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-sm font-mono text-white placeholder:text-gray-600 focus:outline-none focus:border-emerald-500 resize-none" />
             </div>
           )}
         </div>
       )}
 
       {tab === "sheets" && (
-        <div className="space-y-2">
+        <div className="space-y-3">
           <label className="text-sm text-gray-400 block">Public Google Sheets URL</label>
-          <input type="text" value={sheetUrl} onChange={e => setSheetUrl(e.target.value)} placeholder="https://docs.google.com/spreadsheets/d/..." className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-emerald-500" />
+          <div className="flex gap-2">
+            <input type="text" value={sheetUrl} onChange={e => { setSheetUrl(e.target.value); setDetectedKeys([]); setShowMapping(false); }}
+              placeholder="https://docs.google.com/spreadsheets/d/..."
+              className="flex-1 bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-emerald-500" />
+            <button
+              onClick={async () => {
+                if (!sheetUrl) return;
+                try {
+                  const res = await fetch("/api/ingest/csv", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", "x-org-id": orgId },
+                    body: JSON.stringify({ sheet_url: sheetUrl, preview_only: true }),
+                  });
+                  const data = await res.json();
+                  if (data.columns) {
+                    setDetectedKeys(data.columns);
+                    const autoMap: Record<string, string> = {};
+                    for (const field of ourFields) {
+                      const match = data.columns.find((k: string) => k.toLowerCase() === field.key || k.toLowerCase().includes(field.key));
+                      if (match) autoMap[field.key] = match;
+                    }
+                    setMapping(autoMap);
+                    setShowMapping(true);
+                  }
+                } catch { /* silent */ }
+              }}
+              className="px-4 py-3 rounded-xl text-sm font-medium transition-colors shrink-0"
+              style={{ background:"var(--bg-surface-2)", border:"1px solid var(--border)", color:"var(--text-primary)" }}>
+              Preview columns
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Field Mapping UI — shown for all tabs when columns are detected */}
+      {showMapping && detectedKeys.length > 0 && (
+        <div className="mt-4 rounded-xl border p-4 space-y-3" style={{ background:"var(--bg-surface-2)", border:"1px solid var(--border)" }}>
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold" style={{ color:"var(--text-primary)" }}>Map your fields → our fields</p>
+            <span className="text-xs" style={{ color:"var(--text-muted)" }}>optional — we auto-detect what we can</span>
+          </div>
+          <div className="space-y-2">
+            {ourFields.map(field => (
+              <div key={field.key} className="flex items-center gap-3">
+                <div className="w-28 shrink-0">
+                  <span className="text-xs font-mono px-2 py-1 rounded" style={{ background:"var(--bg-surface-3)", color: field.required ? "#5b8fff" : "var(--text-muted)" }}>
+                    {field.label}{field.required ? " *" : ""}
+                  </span>
+                </div>
+                <span style={{ color:"var(--text-muted)" }} className="text-xs">←</span>
+                <select
+                  value={mapping[field.key] || ""}
+                  onChange={e => setMapping(m => ({ ...m, [field.key]: e.target.value }))}
+                  className="flex-1 text-xs rounded-lg px-2 py-1.5 focus:outline-none appearance-none"
+                  style={{ background:"var(--bg-surface)", border:"1px solid var(--border)", color:"var(--text-primary)" }}
+                >
+                  <option value="">— auto detect —</option>
+                  {detectedKeys.map(k => <option key={k} value={k}>{k}</option>)}
+                </select>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
