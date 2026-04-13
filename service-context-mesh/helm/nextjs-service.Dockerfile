@@ -23,4 +23,4 @@ ENV NODE_ENV=production
 
 EXPOSE 3000
 ENV PORT=3000 HOSTNAME="0.0.0.0"
-CMD ["sh", "-c", "./node_modules/.bin/prisma db push --schema=prisma/schema.prisma --skip-generate && node .next/standalone/server.js"]
+CMD ["sh", "-c", "./node_modules/.bin/prisma db push --schema=prisma/schema.prisma --skip-generate 2>&1 && echo 'DB migration done' || echo 'DB migration failed but continuing'; node .next/standalone/server.js"]

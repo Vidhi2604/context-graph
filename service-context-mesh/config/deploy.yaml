@@ -21,6 +21,22 @@ service:
   targetPort: 3000
 
 application:
+  migrations:
+    enabled: true
+    backoffLimit: 2
+    ttlSecondsAfterFinished: 3600
+    activeDeadlineSeconds: 300
+    command:
+      - sh
+      - -c
+      - "./node_modules/.bin/prisma db push --schema=prisma/schema.prisma --skip-generate"
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+        cpu: "200m"
   container:
     port: 3000
     targetPort: 3000
