@@ -137,10 +137,11 @@ const configs: Record<string, IngestConfig> = {
 
 export const DEFAULT_CONFIG: IngestConfig = {
   identifier_fields: ["email", "user_id", "phone", "customer_id", "patient_id", "mrn", "id", "uid", "userId"],
-  event_type_field: "event_type",   // tries: event_type, event, action, type, name
-  timestamp_field: "timestamp",     // tries: timestamp, created_at, ts, date, time
-  amount_field: "amount",           // tries: amount, price, total, value, order_value
-  channel_field: "channel",         // tries: channel, platform, source, medium
+  event_type_field: "event_type",
+  timestamp_field: "timestamp",
+  amount_field: "amount",
+  channel_field: "channel",
+  product_fields: { name: "product_name", category: "category", id: "product_id" },
   event_type_map: {},
 };
 

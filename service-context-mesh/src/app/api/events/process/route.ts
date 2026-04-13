@@ -403,9 +403,12 @@ async function linkRetailContext(eventId: string, event: Record<string, unknown>
     await runQuery(
       `
       MATCH (e:Event {id: $eventId, _tenant: $tenantId})
-      MERGE (prod:Product {product_id: $prodId, _tenant: $tenantId})
+      MERGE (prod:Product {product_id: $prodId})
         ON CREATE SET prod.name = $name, prod.category = $category,
-                      prod.brand = $brand, prod.price = $price
+                      prod.brand = $brand, prod.price = $price, prod._tenant = $tenantId
+        ON MATCH SET prod.name = COALESCE($name, prod.name)
+      WITH e, prod
+      WHERE NOT (e)-[:INVOLVES]->(prod)
       CREATE (e)-[:INVOLVES]->(prod)
       `,
       {
