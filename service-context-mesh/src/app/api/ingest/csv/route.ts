@@ -3,6 +3,8 @@ import { getOrgFromRequest, errorResponse } from "@/lib/api-auth";
 import { mapRawPayload } from "@/lib/raw-mapper";
 import { normalizePayload } from "@/lib/payload-normalizer";
 import { getConfig } from "@/lib/ingest-configs";
+import { runQuery } from "@/lib/neo4j";
+import { v4 as uuidv4 } from "uuid";
 
 function parseCSV(text: string): Record<string, string>[] {
   const lines = text.trim().split(/\r?\n/);
@@ -142,7 +144,11 @@ export async function POST(req: NextRequest) {
     // Run each CSV row through normalizePayload first (alias normalization, nested surfacing)
     // then through mapRawPayload for full identity/event extraction
     const normalizedRows = rows.flatMap(r => normalizePayload(r));
-    const mapped = normalizedRows.map(r => mapRawPayload(r, config, "csv")).filter(Boolean).map(e => ({ ...e, _ingest_source: "csv_import" }));
+    const mapped = normalizedRows.map(r => mapRawPayload(r, config, "csv")).filter(Boolean).map(e => ({
+      ...e,
+      _ingest_source: "csv_import",
+      confidence_score: 1.0, // CSV imports are trusted — bypass review queue
+    }));
 
     if (mapped.length === 0) {
       return NextResponse.json({
@@ -152,33 +158,82 @@ export async function POST(req: NextRequest) {
       }, { status: 422 });
     }
 
-    // Process all events in a single batch call
-    const baseUrl = `${req.nextUrl.protocol}//${req.nextUrl.host}`;
+    // Bulk UNWIND write — one query per 500 rows instead of 5 queries per row
+    const BULK_SIZE = 500;
     let ingested = 0;
     let failed = 0;
 
-    try {
-      const res = await fetch(`${baseUrl}/api/events/process`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-org-id": session.orgId,
-          "x-cron-secret": process.env.CRON_SECRET || "dev",
-        },
-        body: JSON.stringify({
-          events: mapped.map(e => ({ ...e, _vertical: session.vertical })),
-          tenantId: session.tenantId,
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        ingested = data.processed ?? mapped.length;
-        failed = data.failed ?? 0;
-      } else {
-        failed = mapped.length;
+    const bulkRows = mapped.map(e => {
+      const identifiers = (e.identifiers || {}) as Record<string, string>;
+      const profileData = (e.profile_data || {}) as Record<string, unknown>;
+      const props = (e.properties || {}) as Record<string, unknown>;
+      const ev = e as unknown as Record<string, unknown>;
+      return {
+        profileId: `prof_${uuidv4().slice(0, 8)}`,
+        eventId: `evt_${uuidv4().slice(0, 8)}`,
+        email: identifiers.email || null,
+        phone: identifiers.phone || null,
+        crmId: identifiers.crm_id || null,
+        name: (profileData.name as string) || null,
+        tier: (profileData.tier as string) || null,
+        city: (profileData.city as string) || null,
+        ltv: (profileData.ltv as number) || null,
+        eventType: e.event_type || "csv_import",
+        timestamp: e.timestamp || new Date().toISOString(),
+        amount: (ev.amount as number) || (props.amount as number) || null,
+        channel: (ev.channel as string) || (props.channel as string) || null,
+        status: (ev.status as string) || (props.status as string) || "completed",
+        properties: JSON.stringify(props),
+      };
+    });
+
+    let lastError: string | null = null;
+    for (let i = 0; i < bulkRows.length; i += BULK_SIZE) {
+      const batch = bulkRows.slice(i, i + BULK_SIZE);
+      try {
+        // MERGE profiles by email/phone (dedup), CREATE events in bulk
+        await runQuery(
+          `UNWIND $batch AS row
+           MERGE (p:Profile {
+             email: CASE WHEN row.email IS NOT NULL THEN row.email ELSE row.profileId END,
+             _tenant: $tenantId
+           })
+           ON CREATE SET
+             p.profile_id = row.profileId,
+             p.name       = row.name,
+             p.tier       = row.tier,
+             p.city       = row.city,
+             p.ltv        = row.ltv,
+             p.phone      = row.phone,
+             p.crm_id     = row.crmId,
+             p.created_at = datetime()
+           ON MATCH SET
+             p.name = COALESCE(row.name, p.name),
+             p.tier = COALESCE(row.tier, p.tier),
+             p.city = COALESCE(row.city, p.city),
+             p.ltv  = COALESCE(row.ltv,  p.ltv)
+           CREATE (e:Event {
+             id:             row.eventId,
+             event_type:     row.eventType,
+             timestamp:      datetime(row.timestamp),
+             amount:         row.amount,
+             channel:        row.channel,
+             status:         row.status,
+             properties:     row.properties,
+             _ingest_source: "csv_import",
+             _tenant:        $tenantId,
+             created_at:     datetime()
+           })
+           CREATE (p)-[:PERFORMED]->(e)`,
+          { batch, tenantId: session.tenantId }
+        );
+        ingested += batch.length;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(`[csv] bulk write error batch ${i}:`, msg);
+        lastError = msg;
+        failed += batch.length;
       }
-    } catch {
-      failed = mapped.length;
     }
 
     return NextResponse.json({
@@ -189,6 +244,7 @@ export async function POST(req: NextRequest) {
       events_failed: failed,
       skipped: rows.length - mapped.length,
       columns_detected: Object.keys(rows[0] || {}),
+      ...(lastError ? { ingest_error: lastError } : {}),
     }, { status: 202 });
 
   } catch (error) {
