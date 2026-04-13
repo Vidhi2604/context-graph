@@ -9,11 +9,34 @@ docker:
 
 ingress:
   enabled: true
-  host: context-mesh.hack-apr-26.nurixlabs.com
-  path: /
-  pathType: Prefix
+  scheme: "internet-facing"
+  listenPorts: '[{"HTTP": 80},{"HTTPS": 443}]'
+  hosts:
+    - host: "context-mesh.hack.nurixlabs.tech"
+      paths:
+        - path: /
+          pathType: Prefix
+
+service:
+  targetPort: 3000
 
 application:
+  migrations:
+    enabled: true
+    backoffLimit: 2
+    ttlSecondsAfterFinished: 3600
+    activeDeadlineSeconds: 300
+    command:
+      - sh
+      - -c
+      - "./node_modules/.bin/prisma db push --schema=prisma/schema.prisma --skip-generate"
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+        cpu: "200m"
   container:
     port: 3000
     targetPort: 3000
@@ -22,7 +45,7 @@ application:
       enabled: true
       path: /
       port: 3000
-      initialDelaySeconds: 60
+      initialDelaySeconds: 90
       periodSeconds: 15
       timeoutSeconds: 10
       failureThreshold: 5
@@ -30,7 +53,7 @@ application:
       enabled: true
       path: /
       port: 3000
-      initialDelaySeconds: 60
+      initialDelaySeconds: 90
       periodSeconds: 10
       timeoutSeconds: 5
       failureThreshold: 5
@@ -44,3 +67,27 @@ resources:
     cpu: "500m"
 
 replicaCount: 1
+
+vpnIngress:
+  enabled: false
+
+wssIngress:
+  enabled: false
+
+internalIngress:
+  enabled: false
+
+serviceMonitor:
+  enabled: false
+
+podMonitor:
+  enabled: false
+
+configMap:
+  enabled: false
+
+secret:
+  enabled: false
+
+serviceAccount:
+  create: true

@@ -1,10 +1,11 @@
-export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
-import { getOrgFromApiKey, errorResponse } from "@/lib/api-auth";
+import { getOrgFromRequest, errorResponse } from "@/lib/api-auth";
 import { getConfig } from "@/lib/ingest-configs";
 import { mapRawPayload } from "@/lib/raw-mapper";
-import { produceToStream } from "@/lib/streams";
+import { normalizePayload } from "@/lib/payload-normalizer";
+import { produceToStream, isStreamsConfigured } from "@/lib/streams";
 import { TraceCollector } from "@/lib/trace";
+import { logActivity, completeActivity } from "@/lib/activity-log";
 
 /**
  * POST /api/ingest/raw
@@ -28,10 +29,10 @@ export async function POST(req: NextRequest) {
 
     // Auth via API key
     const session = await (trace
-      ? trace.run("Auth & Tenant Resolution", "getOrgFromApiKey()", "auth",
+      ? trace.run("Auth & Tenant Resolution", "getOrgFromRequest()", "auth",
           "API key in Authorization header",
-          () => getOrgFromApiKey(req))
-      : getOrgFromApiKey(req));
+          () => getOrgFromRequest(req))
+      : getOrgFromRequest(req));
 
     // Get client config
     const clientKey = req.nextUrl.searchParams.get("client") || undefined;
@@ -41,9 +42,9 @@ export async function POST(req: NextRequest) {
           async () => getConfig(clientKey))
       : Promise.resolve(getConfig(clientKey)));
 
-    // Parse body — accept single object or array
+    // Parse body — normalize ANY shape into flat array of events
     const body = await req.json();
-    const payloads: Record<string, unknown>[] = Array.isArray(body) ? body : [body];
+    const payloads: Record<string, unknown>[] = normalizePayload(body);
 
     if (payloads.length === 0) {
       return NextResponse.json({ error: "Empty payload" }, { status: 400 });
@@ -54,6 +55,11 @@ export async function POST(req: NextRequest) {
     }
 
     // Map all payloads
+    const mapActId = logActivity(session.tenantId, {
+      layer: "mapping", label: "Field Mapping",
+      detail: `${payloads.length} payload(s) · client: ${clientKey || "default"}`,
+      status: "running", started_at: Date.now(),
+    });
     const mapped = await (trace
       ? trace.run("Field Mapping", "mapRawPayload()", "mapping",
           `${payloads.length} payload(s), client: ${clientKey || "default"}`,
@@ -61,9 +67,21 @@ export async function POST(req: NextRequest) {
             const results = payloads.map(p => mapRawPayload(p, config, clientKey || "raw"));
             return results;
           })
-      : Promise.resolve(payloads.map(p => mapRawPayload(p, config, clientKey || "raw"))));
+      : Promise.resolve(payloads.map(p => mapRawPayload(p, config, clientKey || "raw"))))
+        .then(results => results.map(e => e ? { ...e, _ingest_source: clientKey || "api" } : e));
 
     const validEvents = mapped.filter(Boolean);
+    const firstEvent = validEvents[0] as unknown as Record<string, unknown> | undefined;
+    const identifiers = (firstEvent?.identifiers || {}) as Record<string, string>;
+    completeActivity(session.tenantId, mapActId, validEvents.length > 0 ? "success" : "error",
+      `${validEvents.length}/${payloads.length} mapped · identifiers: ${Object.keys(identifiers).join(", ") || "none"}`, {
+      total: payloads.length,
+      mapped: validEvents.length,
+      skipped: payloads.length - validEvents.length,
+      client_config: clientKey || "default",
+      sample_event_type: firstEvent?.event_type || null,
+      sample_identifiers: Object.keys(identifiers),
+    });
     const skipped = payloads.length - validEvents.length;
 
     if (validEvents.length === 0) {
@@ -74,13 +92,14 @@ export async function POST(req: NextRequest) {
       }, { status: 422 });
     }
 
-    // Force sync for raw ingest — stream consumer unreliable in dev
-    const streamsConfigured = false;
+    const streamsConfigured = isStreamsConfigured();
+    // Force sync when request comes from import UI (?sync=true) or always for dashboard imports
+    const forceSync = req.nextUrl.searchParams.get("sync") === "true";
 
     let ingested = 0;
     let failed = 0;
 
-    if (streamsConfigured) {
+    if (streamsConfigured && !forceSync) {
       // Async via Kafka
       await (trace
         ? trace.run("Kafka Produce", "produceBatch()", "kafka",
@@ -103,39 +122,31 @@ export async function POST(req: NextRequest) {
             }
           })());
     } else {
-      // Sync fallback — process directly
-      await (trace
-        ? trace.run("Direct Processing (sync fallback)", "processEvents()", "neo4j",
-            `Kafka not configured — processing ${validEvents.length} events synchronously`,
-            async () => {
-              const baseUrl = `${req.nextUrl.protocol}//${req.nextUrl.host}`;
-              for (const event of validEvents) {
-                try {
-                  await fetch(`${baseUrl}/api/events/process`, {
-                    method: "POST",
-                    headers: {
-                      "Content-Type": "application/json",
-                      "x-org-id": session.orgId,
-                    },
-                    body: JSON.stringify({ events: [{ ...event, _vertical: session.vertical }] }),
-                  });
-                  ingested++;
-                } catch { failed++; }
-              }
-            })
-        : (async () => {
-            const baseUrl = `${req.nextUrl.protocol}//${req.nextUrl.host}`;
-            for (const event of validEvents) {
-              try {
-                await fetch(`${baseUrl}/api/events`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json", "Authorization": req.headers.get("Authorization")! },
-                  body: JSON.stringify({ ...event, _vertical: session.vertical }),
-                });
-                ingested++;
-              } catch { failed++; }
-            }
-          })());
+      // Sync — process all events in one batch call
+      const baseUrl = `${req.nextUrl.protocol}//${req.nextUrl.host}`;
+      try {
+        const res = await fetch(`${baseUrl}/api/events/process`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-org-id": session.orgId,
+            "x-cron-secret": process.env.CRON_SECRET || "dev",
+          },
+          body: JSON.stringify({
+            events: validEvents.map(e => ({ ...e, _vertical: session.vertical })),
+            tenantId: session.tenantId,
+          }),
+        });
+        if (res.ok) {
+          const result = await res.json();
+          ingested = result.processed ?? validEvents.length;
+          failed = result.failed ?? 0;
+        } else {
+          failed = validEvents.length;
+        }
+      } catch {
+        failed = validEvents.length;
+      }
     }
 
     const response = {

@@ -2,7 +2,7 @@ import { z } from "zod";
 
 // ── Connector Config ───────────────────────────────────────────────
 
-export const ConnectorTypeSchema = z.enum(["hubspot", "zendesk", "nurix", "salesforce", "zoho"]);
+export const ConnectorTypeSchema = z.enum(["hubspot", "zendesk", "nurix", "salesforce", "zoho", "mcp"]);
 export type ConnectorType = z.infer<typeof ConnectorTypeSchema>;
 
 export interface ConnectorConfig {
@@ -55,6 +55,9 @@ export interface ConnectorAdapter {
 
   /** Test that credentials are valid */
   testConnection(credentials: Record<string, string>): Promise<{ ok: boolean; detail?: string }>;
+
+  /** Real-time search by query term — returns matching events for live enrichment */
+  liveSearch?(query: string, credentials: Record<string, string>): Promise<ContextMeshEvent[]>;
 }
 
 // ── Sync result ───────────────────────────────────────────────────

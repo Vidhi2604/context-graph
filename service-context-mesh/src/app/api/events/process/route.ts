@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
       messages = [];
     }
 
-    const isRetail = session.vertical === "retail";
+    const isRetail = session.vertical !== "healthcare";
 
     let processed = 0;
     let skipped = 0;
@@ -61,6 +61,21 @@ export async function POST(req: NextRequest) {
         // ── Confidence gate ──────────────────────────────────────
         const confidence = (event.confidence_score as number) ?? 1.0;
         const decision = classifyConfidence(confidence);
+
+        logActivity(session.tenantId, {
+          layer: "scoring", label: "Confidence Gate",
+          detail: `score: ${Math.round(confidence * 100)}% → ${decision}`,
+          status: decision === "reject" ? "error" : decision === "review" ? "skipped" : "success",
+          started_at: Date.now(), ended_at: Date.now(), duration_ms: 0,
+          group_id: groupId,
+          metadata: {
+            confidence_score: confidence,
+            decision,
+            event_type: String(event.event_type || "unknown"),
+            threshold_reject: 0.6,
+            threshold_review: 0.85,
+          },
+        });
 
         if (decision === "reject") {
           rejected++;
@@ -94,7 +109,22 @@ export async function POST(req: NextRequest) {
         // 1. Identity resolution
         const identifiers = (event.identifiers || {}) as Record<string, string>;
         const profileData = (event.profile_data || {}) as Record<string, unknown>;
-        const { profileId } = await resolveIdentity(identifiers, session.tenantId, profileData);
+        const identityActId = logActivity(session.tenantId, {
+          layer: "process", label: "Identity Resolution",
+          detail: `identifiers: ${Object.keys(identifiers).join(", ")}`,
+          status: "running", started_at: Date.now(), group_id: groupId,
+        });
+        const identityResult = await resolveIdentity(identifiers, session.tenantId, profileData);
+        const { profileId } = identityResult;
+        completeActivity(session.tenantId, identityActId, "success",
+          `${identityResult.isNew ? "new profile created" : identityResult.merged ? "profiles merged" : "existing profile matched"} → ${profileId}`, {
+          profile_id: profileId,
+          is_new: identityResult.isNew,
+          merged: identityResult.merged,
+          identities_matched: identityResult.identitiesMatched,
+          identities_added: identityResult.identitiesAdded,
+          identifier_types: Object.keys(identifiers),
+        });
 
         auditLog({
           tenant_id: session.tenantId,
@@ -110,10 +140,18 @@ export async function POST(req: NextRequest) {
         const neo4jId = logActivity(session.tenantId, {
           layer: "neo4j",
           label: "Neo4j Write",
-          detail: `${isRetail ? "Event" : "Visit"} node · profile: ${profileId} · type: ${String(event.event_type || "unknown")}`,
+          detail: `${isRetail ? "Event" : "Visit"} · ${String(event.event_type || "unknown")} → ${profileId}`,
           status: "running",
           started_at: Date.now(),
           group_id: groupId,
+          metadata: {
+            node_type: isRetail ? "Event" : "Visit",
+            event_type: String(event.event_type || "unknown"),
+            profile_id: profileId,
+            confidence: confidence,
+            decision: "auto_commit",
+            channel: event.channel || null,
+          },
         });
         const timestamp = (event.timestamp as string) || new Date().toISOString();
 
@@ -123,17 +161,39 @@ export async function POST(req: NextRequest) {
           } else {
             await createHealthcareVisit(nodeId, profileId, event, timestamp, session.tenantId);
           }
-          completeActivity(session.tenantId, neo4jId, "success", `node: ${nodeId}`);
+          completeActivity(session.tenantId, neo4jId, "success", `node: ${nodeId}`, { node_id: nodeId });
         } catch (e) {
           completeActivity(session.tenantId, neo4jId, "error", e instanceof Error ? e.message : "write failed");
           throw e;
         }
 
         // 3. Link to product (retail) or diagnosis (healthcare)
+        const ctxActId = logActivity(session.tenantId, {
+          layer: "neo4j", label: "Context Linking",
+          detail: `linking ${isRetail ? "product/payment" : "diagnosis/treatment"} to ${nodeId}`,
+          status: "running", started_at: Date.now(), group_id: groupId,
+        });
         if (isRetail) {
           await linkRetailContext(nodeId, event, session.tenantId);
+          const product = event.product as Record<string, unknown> | undefined;
+          const payment = event.payment as Record<string, unknown> | undefined;
+          completeActivity(session.tenantId, ctxActId, "success",
+            `linked: ${[product?.name && `product(${product.name})`, payment?.method && `payment(${payment.method})`].filter(Boolean).join(", ") || "no context"}`, {
+            product: product?.name || null,
+            category: product?.category || null,
+            payment_method: payment?.method || null,
+            amount: event.amount || null,
+          });
         } else {
           await linkHealthcareContext(nodeId, event, session.tenantId);
+          const diagnosis = event.diagnosis as Record<string, unknown> | undefined;
+          const treatment = event.treatment as Record<string, unknown> | undefined;
+          completeActivity(session.tenantId, ctxActId, "success",
+            `linked: ${[diagnosis?.name && `diagnosis(${diagnosis.name})`, treatment?.name && `treatment(${treatment.name})`].filter(Boolean).join(", ") || "no context"}`, {
+            diagnosis: diagnosis?.name || null,
+            icd_code: diagnosis?.icd_code || null,
+            treatment: treatment?.name || null,
+          });
         }
 
         // 4. Link to policy/protocol
@@ -198,11 +258,14 @@ export async function POST(req: NextRequest) {
         // 6. Extract commitments
         if (event.event_type === "commitment_made") {
           const props = (event.properties || {}) as Record<string, unknown>;
+          // Support both flat and nested properties (raw ingest wraps payload in properties)
+          const nested = (props.properties || {}) as Record<string, unknown>;
+          const str = (v: unknown) => (typeof v === "string" ? v : null);
           await createCommitment(profileId, session.tenantId, {
-            promise_text: (props.promise_text as string) || "",
-            deadline: (props.deadline as string) || null,
-            assignee: (props.assignee as string) || null,
-            confidence_score: props.confidence_score as number,
+            promise_text: str(props.promise_text) || str(nested.promise_text) || "",
+            deadline: str(props.deadline) || str(nested.deadline) || null,
+            assignee: str(props.assignee) || str(nested.assignee) || null,
+            confidence_score: (props.confidence_score || nested.confidence_score) as number,
           }, nodeId);
         }
 
@@ -220,6 +283,24 @@ export async function POST(req: NextRequest) {
           `,
           { profileId, nodeId, tenantId: session.tenantId }
         ).catch(() => {}); // No previous event is fine
+
+        // Final event summary
+        logActivity(session.tenantId, {
+          layer: "ingest", label: "Event Committed",
+          detail: `${String(event.event_type || "unknown")} · profile: ${profileId} · node: ${nodeId}`,
+          status: "success", started_at: Date.now(), ended_at: Date.now(), duration_ms: 0,
+          group_id: groupId,
+          metadata: {
+            node_id: nodeId,
+            profile_id: profileId,
+            event_type: String(event.event_type || "unknown"),
+            timestamp: timestamp,
+            channel: event.channel || null,
+            amount: event.amount || null,
+            is_new_profile: identityResult.isNew,
+            source: event._source || "api",
+          },
+        });
 
         // Mark as processed
         if (key) processedKeys.add(key);
@@ -251,9 +332,11 @@ async function createRetailEvent(
       status: $status,
       amount: $amount,
       channel: $channel,
+      payment_method: $paymentMethod,
       exception: $exception,
       confidence_score: $confidence,
       properties: $properties,
+      _ingest_source: $ingestSource,
       _tenant: $tenantId,
       created_at: datetime()
     })
@@ -266,9 +349,13 @@ async function createRetailEvent(
       status: (event.status as string) || "completed",
       amount: (event.amount as number) || null,
       channel: (event.channel as string) || null,
+      paymentMethod: (event.payment as Record<string,unknown>)?.method as string
+        || (event.properties as Record<string,unknown>)?.payment_method as string
+        || null,
       exception: !!(event.properties as Record<string, unknown>)?.exception,
       confidence: (event.confidence_score as number) || 1.0,
       properties: JSON.stringify(event.properties || {}),
+      ingestSource: (event._ingest_source as string) || (event._source as string) || "csv_import",
     }
   );
 }
@@ -316,9 +403,12 @@ async function linkRetailContext(eventId: string, event: Record<string, unknown>
     await runQuery(
       `
       MATCH (e:Event {id: $eventId, _tenant: $tenantId})
-      MERGE (prod:Product {product_id: $prodId, _tenant: $tenantId})
+      MERGE (prod:Product {product_id: $prodId})
         ON CREATE SET prod.name = $name, prod.category = $category,
-                      prod.brand = $brand, prod.price = $price
+                      prod.brand = $brand, prod.price = $price, prod._tenant = $tenantId
+        ON MATCH SET prod.name = COALESCE($name, prod.name)
+      WITH e, prod
+      WHERE NOT (e)-[:INVOLVES]->(prod)
       CREATE (e)-[:INVOLVES]->(prod)
       `,
       {

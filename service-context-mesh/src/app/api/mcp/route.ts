@@ -1,10 +1,32 @@
-export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { getOrgFromApiKey, errorResponse } from "@/lib/api-auth";
+import { prisma } from "@/lib/prisma";
+
+async function getSessionFromRequest(req: NextRequest) {
+  // Standard: Bearer token auth
+  if (req.headers.get("Authorization")?.startsWith("Bearer ")) {
+    return getOrgFromApiKey(req);
+  }
+  // Nurix agent: workspace-id header → look up org by Nurix connector credentials
+  const workspaceId = req.headers.get("x-workspace-id") || req.headers.get("workspace-id");
+  if (workspaceId) {
+    // Find org that has a Nurix connector with this workspace_id
+    const connector = await prisma.connector.findFirst({
+      where: { type: "nurix", credentials: { contains: workspaceId } },
+    });
+    if (connector) {
+      const org = await prisma.org.findFirst({ where: { tenantId: connector.tenantId } });
+      if (org) {
+        return { userId: "", orgId: org.id, tenantId: org.tenantId, vertical: org.vertical, plan: org.plan as "starter" | "pro" | "enterprise" };
+      }
+    }
+  }
+  throw new Error("Not authenticated");
+}
 
 export async function POST(req: NextRequest) {
   try {
-    const session = await getOrgFromApiKey(req);
+    const session = await getSessionFromRequest(req);
     const { method, params } = await req.json();
 
     switch (method) {
@@ -38,9 +60,14 @@ async function handleToolCall(
   req: NextRequest
 ) {
   const baseUrl = `${req.nextUrl.protocol}//${req.nextUrl.host}`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "x-org-id": session.orgId,
+    "x-cron-secret": process.env.CRON_SECRET || "dev",
+  };
+  // Forward API key if present
   const authHeader = req.headers.get("Authorization");
-  if (!authHeader) return NextResponse.json({ error: "Missing Authorization header" }, { status: 401 });
-  const headers = { Authorization: authHeader, "Content-Type": "application/json", "x-org-id": session.orgId };
+  if (authHeader) headers.Authorization = authHeader;
 
   async function callApi(url: string, method = "GET", body?: unknown) {
     const res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined });

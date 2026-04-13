@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 interface ValueBarProps {
   stats: {
     events_tracked: number;
@@ -14,36 +16,47 @@ export default function ValueBar({ stats }: ValueBarProps) {
   if (!stats) return null;
 
   const cards = [
-    { label: "Events Tracked", value: (stats.events_tracked ?? 0).toLocaleString() },
-    { label: "Profiles Resolved", value: (stats.profiles_resolved ?? 0).toString() },
-    { label: "Identities Merged", value: (stats.identity_fragments ?? 0).toString() },
+    { label: "Events Tracked", value: (stats.events_tracked ?? 0).toLocaleString(), href: "/dashboard/events" },
+    { label: "Profiles Resolved", value: (stats.profiles_resolved ?? 0).toLocaleString(), href: "/dashboard/profiles" },
+    { label: "Identities Merged", value: (stats.identity_fragments ?? 0).toLocaleString(), href: null },
     {
-      label: "Commitments",
+      label: "Commitments (Open/Done/Missed)",
       value: `${stats.commitments?.open || 0}/${stats.commitments?.fulfilled || 0}/${stats.commitments?.breached || 0}`,
-      sub: "O/F/B",
+      href: null,
     },
     {
       label: "Avg Confidence",
-      value: stats.avg_extraction_confidence
-        ? `${Math.round(stats.avg_extraction_confidence * 100)}%`
-        : "—",
+      value: stats.avg_extraction_confidence ? `${Math.round(stats.avg_extraction_confidence * 100)}%` : "—",
+      href: null,
     },
   ];
 
   return (
-    <div className="grid grid-cols-5 gap-3">
-      {cards.map((card) => (
-        <div
-          key={card.label}
-          className="bg-gray-900 border border-gray-800 rounded-lg px-3 py-2 text-center"
-        >
-          <div className="text-lg font-bold text-white">{card.value}</div>
-          <div className="text-[10px] text-gray-500">
-            {card.label}
-            {card.sub && <span className="ml-1 text-gray-600">({card.sub})</span>}
+    <div className="flex gap-2 overflow-x-auto pb-1">
+      {cards.map((card) => {
+        const content = (
+          <>
+            <div className="text-xl font-bold tracking-tight whitespace-nowrap" style={{ color: "var(--text-primary)" }}>
+              {card.value}
+            </div>
+            <div className="text-xs font-medium whitespace-nowrap mt-0.5" style={{ color: "var(--text-muted)" }}>
+              {card.label}
+            </div>
+          </>
+        );
+
+        const cls = "flex-1 min-w-[120px] theme-card px-4 py-3 text-center transition-all";
+
+        return card.href ? (
+          <Link key={card.label} href={card.href} className={`${cls} theme-card-hover`}>
+            {content}
+          </Link>
+        ) : (
+          <div key={card.label} className={cls}>
+            {content}
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

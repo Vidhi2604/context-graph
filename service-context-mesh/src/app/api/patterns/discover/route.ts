@@ -1,4 +1,3 @@
-export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { getOrgFromRequest, errorResponse, ApiError } from "@/lib/api-auth";
 import { runPatternDiscovery } from "@/lib/pattern-discovery";

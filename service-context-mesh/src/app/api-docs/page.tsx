@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 
 // ── Types ─────────────────────────────────────────────────────────
@@ -632,6 +632,8 @@ function EndpointCard({ ep }: { ep: Endpoint }) {
 
 export default function ApiDocsPage() {
   const [activeSection, setActiveSection] = useState("auth");
+  const [baseUrl, setBaseUrl] = useState("https://your-app.com");
+  useEffect(() => { setBaseUrl(window.location.origin); }, []);
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
@@ -647,7 +649,7 @@ export default function ApiDocsPage() {
           </div>
           <div className="flex items-center gap-3 text-xs text-gray-500">
             <span className="bg-emerald-900/30 text-emerald-400 px-2 py-0.5 rounded">v1.0</span>
-            <span>Base URL: <code className="text-gray-300 font-mono">https://your-app.com</code></span>
+            <span>Base URL: <code className="text-gray-300 font-mono">{baseUrl}</code></span>
           </div>
         </div>
       </header>
@@ -697,7 +699,7 @@ export default function ApiDocsPage() {
             </p>
             <div className="mt-4 p-4 bg-gray-900 border border-gray-800 rounded-xl">
               <p className="text-xs text-gray-500 mb-2">Quick start — ingest your first event:</p>
-              <pre className="text-[11px] text-green-400 font-mono overflow-x-auto">{`curl -X POST https://your-app.com/api/events \\
+              <pre className="text-[11px] text-green-400 font-mono overflow-x-auto">{`curl -X POST ${baseUrl}/api/events \\
   -H "Authorization: Bearer sk_tenant_xxx_abc...def" \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -731,7 +733,7 @@ export default function ApiDocsPage() {
 
 cm = ContextMesh(
   api_key="sk_xxx",
-  base_url="https://your-app.com"
+  base_url="${baseUrl}"
 )
 
 # Get agent context
@@ -755,7 +757,7 @@ alerts = cm.get_alerts()`}</pre>
 
 const cm = new ContextMesh({
   apiKey: 'sk_xxx',
-  baseUrl: 'https://your-app.com'
+  baseUrl: '${baseUrl}'
 });
 
 // Get agent context
@@ -782,7 +784,7 @@ await cm.sync({ type: 'hubspot' });`}</pre>
 {
   "mcpServers": {
     "contextmesh": {
-      "url": "https://your-app.com/api/mcp",
+      "url": "${baseUrl}/api/mcp",
       "headers": {
         "Authorization": "Bearer sk_tenant_xxx_abc...def"
       }

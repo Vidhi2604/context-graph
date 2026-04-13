@@ -1,4 +1,3 @@
-export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { getOrgFromRequest, errorResponse } from "@/lib/api-auth";
 import { getQueue, getQueueStats, resolveItem, getQueueItem } from "@/lib/review-queue";

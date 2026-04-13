@@ -231,9 +231,156 @@ function writeHealthcareCSV() {
   console.log(`✅ Healthcare CSV written: ${outPath} (${ROWS} rows, ${headers.split(",").length} columns)`);
 }
 
+// ─── HOME SERVICES (Snabbit / Urban Company) ──────────────────────────────────
+
+const HS_CUSTOMER_NAMES = [
+  "Priya Sharma","Rahul Mehta","Ananya Singh","Vikram Verma","Kavya Patel",
+  "Arjun Kumar","Meera Gupta","Aditya Joshi","Sneha Iyer","Rohan Das",
+  "Divya Reddy","Suresh Pillai","Ritu Malhotra","Manish Kapoor","Sunita Yadav",
+  "Deepak Srivastava","Pooja Nair","Nikhil Sharma","Anjali Bose","Kartik Patel",
+  "Nisha Jain","Amit Tiwari","Sonia Verma","Pankaj Mishra","Reshma Khan",
+  "Varun Gupta","Rajeev Nair","Tanvi Desai","Mohit Agarwal","Shreya Kapoor",
+];
+
+const HS_RUNNER_NAMES = [
+  "Sunita Devi","Rekha Kumari","Meena Bai","Savita Devi","Lalita Devi",
+  "Pushpa Rani","Anita Sharma","Geeta Devi","Kavita Pandey","Seema Kumari",
+  "Rajesh Kumar","Manoj Singh","Suresh Yadav","Ramesh Gupta","Dinesh Kumar",
+  "Babita Negi","Urmila Devi","Champa Devi","Sushila Kumari","Parvati Devi",
+];
+
+const HS_SERVICES = [
+  { id: "svc-001", name: "Regular Home Cleaning",    category: "Cleaning",   price: 499,  duration: 2 },
+  { id: "svc-002", name: "Deep Home Cleaning",        category: "Cleaning",   price: 1299, duration: 4 },
+  { id: "svc-003", name: "Kitchen Deep Clean",        category: "Cleaning",   price: 799,  duration: 2 },
+  { id: "svc-004", name: "Bathroom Cleaning",         category: "Cleaning",   price: 399,  duration: 1 },
+  { id: "svc-005", name: "Sofa & Carpet Cleaning",    category: "Cleaning",   price: 899,  duration: 3 },
+  { id: "svc-006", name: "Laundry & Ironing",         category: "Laundry",    price: 599,  duration: 2 },
+  { id: "svc-007", name: "Daily Cook - Full Day",     category: "Cook",       price: 1099, duration: 6 },
+  { id: "svc-008", name: "Daily Cook - Breakfast",    category: "Cook",       price: 349,  duration: 1 },
+  { id: "svc-009", name: "Full Home Cook (Party)",    category: "Cook",       price: 1499, duration: 4 },
+  { id: "svc-010", name: "Babysitter (4hr)",          category: "Childcare",  price: 799,  duration: 4 },
+  { id: "svc-011", name: "Elderly Care (Full Day)",   category: "Elder Care", price: 1299, duration: 8 },
+  { id: "svc-012", name: "AC Servicing",              category: "Appliance",  price: 649,  duration: 2 },
+  { id: "svc-013", name: "Pest Control (1BHK)",       category: "Pest",       price: 999,  duration: 2 },
+  { id: "svc-014", name: "Water Tank Cleaning",       category: "Cleaning",   price: 799,  duration: 3 },
+  { id: "svc-015", name: "Washing Machine Service",   category: "Appliance",  price: 549,  duration: 1 },
+];
+
+const HS_CITIES = ["Delhi","Mumbai","Bangalore","Hyderabad","Pune","Gurgaon","Noida","Chennai","Kolkata","Ahmedabad"];
+const HS_PAYMENT_METHODS = ["UPI","UPI","UPI","Cash","Credit Card","Debit Card","Paytm","PhonePe"];
+const HS_TIERS = ["Bronze","Bronze","Bronze","Silver","Silver","Gold","Platinum"];
+
+// All possible job lifecycle event types in order
+const HS_JOB_STATUSES = ["unassigned","arrived","in_progress","always_hitl","completed"] as const;
+type JobStatus = typeof HS_JOB_STATUSES[number];
+
+// Maps job_acceptance_status → realistic event_type for the row
+const STATUS_TO_EVENT: Record<JobStatus, string[]> = {
+  unassigned:   ["booking_created"],
+  arrived:      ["partner_arrived", "check_in_issue", "check_in_issue", "support_call"],
+  in_progress:  ["job_check_in", "job_in_progress", "check_out_issue", "check_out_issue", "support_call"],
+  always_hitl:  ["job_accepted", "support_call"],
+  completed:    ["job_check_out", "payment_collected", "review_submitted"],
+};
+
+function generateHomeServicesRow(i: number): string {
+  const customerNum = randInt(1, 400);
+  const profileId = `cust-${String(customerNum).padStart(5, "0")}`;
+  const name = HS_CUSTOMER_NAMES[customerNum % HS_CUSTOMER_NAMES.length] + " " + customerNum;
+  const email = `${name.split(" ")[0].toLowerCase()}${customerNum}@snabbit-demo.com`;
+  const phone = `+91${9100000000 + customerNum}`;
+  const tier = HS_TIERS[customerNum % HS_TIERS.length];
+  const city = HS_CITIES[customerNum % HS_CITIES.length];
+  const ltv = randFloat(499, 45000);
+
+  const svc = rand(HS_SERVICES);
+  const serviceId = svc.id;
+  const serviceName = svc.name;
+  const serviceCategory = svc.category;
+  const price = svc.price;
+  const durationHours = svc.duration;
+
+  // Job status drives most of the other fields
+  const jobStatus: JobStatus = rand([...HS_JOB_STATUSES]);
+  const eventType = rand(STATUS_TO_EVENT[jobStatus]);
+  const partnerArrived = (jobStatus === "arrived" || jobStatus === "in_progress" || jobStatus === "completed").toString();
+
+  // Runner: unassigned jobs have no runner
+  const runnerNum = jobStatus === "unassigned" ? 0 : randInt(1, HS_RUNNER_NAMES.length);
+  const runnerId = runnerNum === 0 ? "" : `runner-${String(runnerNum).padStart(3, "0")}`;
+  const runnerName = runnerNum === 0 ? "" : HS_RUNNER_NAMES[runnerNum - 1];
+
+  const jobId = `job-${String(i).padStart(6, "0")}`;
+  const eventId = `evt-hs-${String(i).padStart(6, "0")}`;
+  const timestamp = randomDate(new Date("2025-08-01"), new Date("2026-04-10"));
+
+  const paymentMethod = rand(HS_PAYMENT_METHODS);
+  const paymentId = jobStatus === "completed" ? `pay-hs-${String(i).padStart(6, "0")}` : "";
+
+  // 4-digit OTP (only relevant for check-in/check-out events)
+  const customerOtp = (eventType.includes("check") || eventType === "support_call") ? String(randInt(1000, 9999)) : "";
+
+  // Ticket ID only for issue/support events
+  const issueEvents = ["check_in_issue","check_out_issue","support_call"];
+  const ticketId = issueEvents.includes(eventType) ? `TKT-${String(100000 + i).padStart(6, "0")}` : "";
+  const issueType = eventType === "check_in_issue" ? "check_in" : eventType === "check_out_issue" ? "check_out" : "";
+
+  const statusMap: Record<string, string> = {
+    booking_created: "confirmed",
+    job_accepted: "confirmed",
+    partner_arrived: "arrived",
+    job_check_in: "in_progress",
+    job_in_progress: "in_progress",
+    check_in_issue: "issue",
+    check_out_issue: "issue",
+    support_call: "escalated",
+    job_check_out: "completed",
+    payment_collected: "completed",
+    review_submitted: "completed",
+  };
+  const status = statusMap[eventType] ?? "confirmed";
+  const exception = issueEvents.includes(eventType) ? "true" : "false";
+  const confidenceScore = randFloat(0.80, 0.99);
+
+  return [
+    profileId, name, email, phone, tier, city, ltv,
+    eventId, eventType, timestamp, price, "app", status,
+    serviceId, serviceName, "Snabbit", serviceCategory, price,
+    paymentId, paymentMethod,
+    runnerId, runnerName,
+    jobId, jobStatus, partnerArrived, customerOtp, ticketId,
+    durationHours, issueType, exception, confidenceScore,
+  ].map(v => `"${v}"`).join(",");
+}
+
+function writeHomeServicesCSV() {
+  const ROWS = 5000;
+  const headers = [
+    "profile_id","name","email","phone","tier","city","ltv",
+    "event_id","event_type","timestamp","amount","channel","status",
+    "service_id","service_name","brand","service_category","price",
+    "payment_id","payment_method",
+    "runner_id","runner_name",
+    "job_id","job_acceptance_status","partner_arrived","customer_otp","ticket_id",
+    "duration_hours","issue_type","exception","confidence_score",
+  ].join(",");
+
+  const lines = [headers];
+  for (let i = 1; i <= ROWS; i++) {
+    lines.push(generateHomeServicesRow(i));
+  }
+
+  const outPath = path.join(OUT_DIR, "home-services-5000.csv");
+  fs.writeFileSync(outPath, lines.join("\n"), "utf-8");
+  console.log(`✅ Home Services CSV written: ${outPath} (${ROWS} rows, ${headers.split(",").length} columns)`);
+}
+
 // ─── RUN ─────────────────────────────────────────────────────────────────────
 writeRetailCSV();
 writeHealthcareCSV();
+writeHomeServicesCSV();
 console.log("\n📁 Files saved to scripts/data/");
-console.log("   retail-25000.csv     — 25 columns, 25000 rows");
-console.log("   healthcare-25000.csv — 32 columns, 25000 rows");
+console.log("   retail-25000.csv        — 25 columns, 25000 rows");
+console.log("   healthcare-25000.csv    — 32 columns, 25000 rows");
+console.log("   home-services-5000.csv  — 31 columns, 5000 rows  (Snabbit/Urban Company)");

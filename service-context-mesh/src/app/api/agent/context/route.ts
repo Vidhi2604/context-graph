@@ -1,4 +1,3 @@
-export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { getOrgFromRequest, errorResponse } from "@/lib/api-auth";
 import { runQuery } from "@/lib/neo4j";
@@ -6,6 +5,8 @@ import { claudeExtract } from "@/lib/llm";
 import { getCommitments } from "@/lib/commitment-tracker";
 import { TraceCollector } from "@/lib/trace";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { getConnectors } from "@/lib/connectors/registry";
+import { buildJourneyFromPhone } from "@/lib/enrichment";
 
 // POST instead of GET — PII (phone, email, mrn) should not be in URL params
 export async function POST(req: NextRequest) {
@@ -31,6 +32,52 @@ export async function POST(req: NextRequest) {
       : resolveFromBody(body, session.tenantId));
 
     if (!profileId) {
+      // Fallback: if phone provided and Nurix connector exists, fetch real-time journey
+      const phone = body.phone;
+      if (phone) {
+        const connectors = await getConnectors(session.tenantId);
+        const nurixConn = connectors.filter(c => c.type === "nurix" && c.active).pop();
+        if (nurixConn) {
+          try {
+            const nurixConfig = {
+              baseUrl: nurixConn.credentials.api_url || "https://agentx-in.nurixlabs.tech",
+              workspaceId: nurixConn.credentials.workspace_id || nurixConn.credentials.api_key || "",
+            };
+            const journey = await buildJourneyFromPhone(phone, nurixConfig);
+            return NextResponse.json({
+              profile: { phone, name: journey.customer_name, user_id: journey.user_id },
+              recent_events: journey.events.map(e => ({
+                event_type: e.intent,
+                agent: e.agent_name,
+                direction: e.direction,
+                duration: e.duration,
+                sentiment: e.sentiment,
+                outcome: e.outcome,
+                timestamp: e.timestamp,
+                summary: e.transcript_snippet,
+                transferred: e.human_transfer_status === 'COMPLETED',
+              })),
+              open_commitments: [],
+              active_exceptions: [],
+              similar_cases: [],
+              risk_score: journey.insights.overall_sentiment === 'negative' ? 0.7 : 0.3,
+              risk_signals: [
+                `${journey.insights.total_touchpoints} total calls`,
+                `Overall sentiment: ${journey.insights.overall_sentiment}`,
+                journey.insights.journey_outcome ? `Last outcome: ${journey.insights.journey_outcome}` : null,
+              ].filter(Boolean),
+              suggested_actions: [{ action: `Review ${journey.insights.total_touchpoints} previous calls before proceeding`, confidence: 0.9 }],
+              source: "nurix_realtime",
+            });
+          } catch (err) {
+            console.error("[get_context] Nurix lookup failed:", err instanceof Error ? err.message : err);
+            return NextResponse.json({
+              error: "Profile not found in graph. Nurix real-time lookup also failed.",
+              hint: "Ensure Nurix connector is connected with correct workspace ID and the phone number exists.",
+            }, { status: 404 });
+          }
+        }
+      }
       return NextResponse.json({ error: "Profile not found" }, { status: 404 });
     }
 

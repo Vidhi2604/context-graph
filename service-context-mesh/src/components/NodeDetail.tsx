@@ -6,10 +6,9 @@ interface NodeDetailProps {
   node: GraphNode | null;
   onClose: () => void;
   onAnalyze: (node: GraphNode) => void;
-  onFindSimilar: (node: GraphNode) => void;
 }
 
-export default function NodeDetail({ node, onClose, onAnalyze, onFindSimilar }: NodeDetailProps) {
+export default function NodeDetail({ node, onClose, onAnalyze }: NodeDetailProps) {
   if (!node) return null;
 
   const isSuperseded = node.properties?.status === "superseded";
@@ -69,12 +68,6 @@ export default function NodeDetail({ node, onClose, onAnalyze, onFindSimilar }: 
           className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-2 rounded-lg text-sm font-medium transition-colors"
         >
           🧠 Analyze
-        </button>
-        <button
-          onClick={() => onFindSimilar(node)}
-          className="w-full bg-gray-800 hover:bg-gray-700 text-white py-2 rounded-lg text-sm font-medium transition-colors"
-        >
-          Find Similar
         </button>
       </div>
     </div>

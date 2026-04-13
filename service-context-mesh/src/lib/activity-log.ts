@@ -27,6 +27,7 @@ export interface ActivityEntry {
   ended_at?: number;
   duration_ms?: number;
   group_id?: string;    // groups parallel steps (e.g. same ingest batch)
+  metadata?: Record<string, unknown>; // structured debug data shown in expanded view
 }
 
 // Circular buffer — keep last 200 entries per tenant
@@ -54,7 +55,8 @@ export function completeActivity(
   tenantId: string,
   id: string,
   status: ActivityStatus,
-  detail?: string
+  detail?: string,
+  metadata?: Record<string, unknown>
 ) {
   const list = store.get(tenantId);
   if (!list) return;
@@ -64,6 +66,7 @@ export function completeActivity(
   entry.duration_ms = entry.ended_at - entry.started_at;
   entry.status = status;
   if (detail) entry.detail = detail;
+  if (metadata) entry.metadata = { ...entry.metadata, ...metadata };
 }
 
 export function getActivity(tenantId: string, since?: number): ActivityEntry[] {

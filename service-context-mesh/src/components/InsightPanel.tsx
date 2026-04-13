@@ -25,43 +25,42 @@ export default function InsightPanel({ insight, loading, planLevel, onRegenerate
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-sm font-semibold text-white">AI Insight</h3>
-        <button onClick={onRegenerate} className="text-xs text-gray-500 hover:text-gray-300">
+        <h3 className="text-base font-semibold text-white">AI Insight</h3>
+        <button onClick={onRegenerate} className="text-sm text-gray-400 hover:text-gray-200">
           Regenerate
         </button>
       </div>
 
       {planLevel === "full" && insight.context ? (
-        // Enterprise: full reasoning chain
-        <div className="grid grid-cols-3 gap-4 h-[380px]">
+        <div className="grid grid-cols-3 gap-4 h-[420px]">
           {/* Context */}
           <div className="bg-gray-950 border border-gray-800 rounded-xl p-4 flex flex-col min-h-0">
-            <h4 className="text-xs font-semibold text-emerald-400 uppercase mb-3 shrink-0">Context</h4>
+            <h4 className="text-xs font-semibold text-emerald-400 uppercase tracking-wider mb-3 shrink-0">Context</h4>
             <div className="overflow-y-auto flex-1 space-y-2 pr-1">
-              <p className="text-xs text-gray-300">{insight.context.summary}</p>
-              <ul className="space-y-1">
+              <p className="text-sm text-gray-200 leading-relaxed">{insight.context.summary}</p>
+              <ul className="space-y-1 mt-2">
                 {insight.context.data_points.map((dp, i) => (
-                  <li key={i} className="text-[10px] text-gray-500">• {dp}</li>
+                  <li key={i} className="text-xs text-gray-400">• {dp}</li>
                 ))}
               </ul>
-              <p className="text-[10px] text-gray-600">{insight.context.graph_scope}</p>
+              <p className="text-xs text-gray-500 mt-1">{insight.context.graph_scope}</p>
             </div>
           </div>
 
           {/* Reasoning */}
           <div className="bg-gray-950 border border-gray-800 rounded-xl p-4 flex flex-col min-h-0">
-            <h4 className="text-xs font-semibold text-blue-400 uppercase mb-3 shrink-0">Reasoning</h4>
+            <h4 className="text-xs font-semibold text-blue-400 uppercase tracking-wider mb-3 shrink-0">Reasoning</h4>
             <div className="overflow-y-auto flex-1 space-y-2 pr-1">
               {insight.reasoning.map((step) => (
-                <div key={step.step} className="bg-gray-950 rounded-lg p-2 shrink-0">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] text-gray-600">Step {step.step}</span>
-                    <span className="text-[10px] text-blue-400 font-mono">
+                <div key={step.step} className="bg-gray-900 rounded-lg p-3 shrink-0">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs text-gray-500">Step {step.step}</span>
+                    <span className="text-xs text-blue-400 font-mono font-medium">
                       {Math.round(step.confidence * 100)}%
                     </span>
                   </div>
-                  <p className="text-[10px] text-gray-300 mt-1">{step.observation}</p>
-                  <p className="text-[10px] text-gray-500 mt-0.5">→ {step.implication}</p>
+                  <p className="text-sm text-gray-200 leading-relaxed">{step.observation}</p>
+                  <p className="text-xs text-gray-400 mt-1">→ {step.implication}</p>
                 </div>
               ))}
             </div>
@@ -69,24 +68,23 @@ export default function InsightPanel({ insight, loading, planLevel, onRegenerate
 
           {/* Result */}
           <div className="bg-gray-950 border border-gray-800 rounded-xl p-4 flex flex-col min-h-0">
-            <h4 className="text-xs font-semibold text-purple-400 uppercase mb-3 shrink-0">Result</h4>
-            <div className="overflow-y-auto flex-1 space-y-2 pr-1">
-              <p className="text-xs text-white font-medium">{insight.result.finding}</p>
-              <p className="text-xs text-gray-300">{insight.result.recommendation}</p>
-              <span className="text-[10px] text-gray-500">
+            <h4 className="text-xs font-semibold text-purple-400 uppercase tracking-wider mb-3 shrink-0">Result</h4>
+            <div className="overflow-y-auto flex-1 space-y-3 pr-1">
+              <p className="text-sm text-white font-medium leading-relaxed">{insight.result.finding}</p>
+              <p className="text-sm text-gray-300 leading-relaxed">{insight.result.recommendation}</p>
+              <p className="text-xs text-gray-500">
                 Confidence: {Math.round(insight.result.confidence * 100)}%
-              </span>
+              </p>
               {insight.result.impact && (
-                <p className="text-[10px] text-emerald-400">{insight.result.impact}</p>
+                <p className="text-sm text-emerald-400 leading-relaxed">{insight.result.impact}</p>
               )}
             </div>
           </div>
         </div>
       ) : (
-        // Pro: summary only
         <div className="space-y-3">
-          <p className="text-sm text-white">{insight.result?.finding || "No finding available"}</p>
-          <p className="text-sm text-gray-300">{insight.result?.recommendation || ""}</p>
+          <p className="text-sm text-white leading-relaxed">{insight.result?.finding || "No finding available"}</p>
+          <p className="text-sm text-gray-300 leading-relaxed">{insight.result?.recommendation || ""}</p>
           <p className="text-xs text-gray-500">
             Confidence: {Math.round((insight.result?.confidence ?? 0) * 100)}%
           </p>
@@ -98,7 +96,7 @@ export default function InsightPanel({ insight, loading, planLevel, onRegenerate
         </div>
       )}
 
-      <p className="text-[10px] text-gray-600 mt-4">
+      <p className="text-xs text-gray-600 mt-4">
         AI-generated. Verify before taking action.
       </p>
     </div>

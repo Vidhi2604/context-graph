@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import Logo from "@/components/Logo";
+import DashboardHeader from "@/components/DashboardHeader";
 
 interface PolicyRow {
   policy: string;
@@ -23,7 +23,6 @@ interface AlertRow {
 
 export default function PoliciesPage() {
   const [policies, setPolicies] = useState<PolicyRow[]>([]);
-  const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [loading, setLoading] = useState(true);
   const orgId = typeof window !== "undefined" ? localStorage.getItem("orgId") || "" : "";
 
@@ -35,9 +34,7 @@ export default function PoliciesPage() {
       .then((data) => {
         const all: AlertRow[] = data.alerts || [];
         const drift = all.filter((a) => a.type === "policy_drift").map((a) => a.data);
-        const other = all.filter((a) => a.type !== "policy_drift");
         setPolicies(drift);
-        setAlerts(other);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -49,25 +46,9 @@ export default function PoliciesPage() {
     ? policies.reduce((s, p) => s + p.override_rate, 0) / policies.length
     : 0;
 
-  const severityColor = (s: string) =>
-    s === "critical" ? "text-red-400 bg-red-900/20 border-red-800/30" :
-    s === "warning" ? "text-yellow-400 bg-yellow-900/20 border-yellow-800/30" :
-    "text-blue-400 bg-blue-900/20 border-blue-800/30";
-
-  return (
+return (
     <div className="min-h-screen bg-gray-950 text-white">
-      <header className="border-b border-gray-800 px-6 py-3">
-        <div className="max-w-7xl mx-auto flex items-center gap-4">
-          <Link href="/dashboard"><Logo size={26} showText /></Link>
-          <nav className="flex gap-1 text-sm">
-            <Link href="/dashboard" className="px-3 py-1 rounded text-gray-400 hover:text-white">Search</Link>
-            <Link href="/dashboard/analytics" className="px-3 py-1 rounded text-gray-400 hover:text-white">Analytics</Link>
-            <Link href="/dashboard/policies" className="px-3 py-1 rounded bg-gray-800 text-white">Policies</Link>
-            <Link href="/dashboard/agents" className="px-3 py-1 rounded text-gray-400 hover:text-white">Agents</Link>
-            <Link href="/dashboard/commitments" className="px-3 py-1 rounded text-gray-400 hover:text-white">Commitments</Link>
-          </nav>
-        </div>
-      </header>
+      <DashboardHeader orgId={orgId} />
 
       <main className="max-w-7xl mx-auto px-6 py-8 space-y-6">
         <div className="flex items-center justify-between">
@@ -106,23 +87,6 @@ export default function PoliciesPage() {
               </div>
             </div>
 
-            {/* Active alerts (non-policy_drift) */}
-            {alerts.length > 0 && (
-              <div className="space-y-2">
-                <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Active Alerts</h3>
-                {alerts.slice(0, 5).map((a, i) => (
-                  <div key={i} className={`border rounded-xl px-4 py-3 flex items-center gap-3 text-sm ${severityColor(a.severity)}`}>
-                    <span className="text-xs capitalize font-medium shrink-0">{a.type.replace(/_/g, " ")}</span>
-                    <span className="flex-1 text-gray-300 text-xs">{a.message}</span>
-                    {a.created_at && (
-                      <span className="text-xs text-gray-600 shrink-0">
-                        {new Date(a.created_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
 
             {/* Policy table */}
             {policies.length === 0 ? (

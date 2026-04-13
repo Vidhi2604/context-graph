@@ -30,8 +30,15 @@ const EVENT_COLORS: Record<string, string> = {
   Surgery:            "#a855f7",
 };
 
+function hashColor(str: string): string {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  const colors = ["#3b82f6","#10b981","#8b5cf6","#f97316","#ec4899","#14b8a6","#eab308","#a855f7","#06b6d4","#f43f5e"];
+  return colors[Math.abs(hash) % colors.length];
+}
+
 function getEventColor(type: string): string {
-  return EVENT_COLORS[type] || "#6b7280";
+  return EVENT_COLORS[type] || hashColor(type);
 }
 
 function formatTimestamp(ts: string): { date: string; time: string; relative: string } {
@@ -56,19 +63,25 @@ function formatTimestamp(ts: string): { date: string; time: string; relative: st
 
 function isPersonSearch(nodes: GraphNode[]): boolean {
   const profiles = nodes.filter(n => n.label === "Profile");
-  const events = nodes.filter(n => n.label === "Event" || n.label === "Visit");
+  const events = nodes.filter(n => n.properties.timestamp && n.label !== "Profile" && n.label !== "Identity");
   return profiles.length <= 3 && events.length > 0;
 }
 
 export default function ContextTimeline({ nodes, query, onEventClick }: ContextTimelineProps) {
   const eventNodes = useMemo(() =>
     nodes
-      .filter(n => (n.label === "Event" || n.label === "Visit") && n.properties.timestamp)
+      .filter(n => n.properties.timestamp && n.label !== "Profile" && n.label !== "Identity")
       .sort((a, b) => String(a.properties.timestamp).localeCompare(String(b.properties.timestamp))),
     [nodes]
   );
 
-  if (eventNodes.length === 0) return null;
+  if (eventNodes.length === 0) return (
+    <div className="h-full flex flex-col items-center justify-center text-center p-4">
+      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Timeline</p>
+      <p className="text-gray-600 text-sm">No events found</p>
+      <p className="text-gray-700 text-xs mt-1">Events will appear here once ingested</p>
+    </div>
+  );
 
   const isPerson = isPersonSearch(nodes);
 
@@ -95,44 +108,86 @@ function PersonTimeline({ events, onEventClick }: {
 }) {
   return (
     <div className="relative">
-      {/* Vertical line */}
+      {/* Vertical line — centered in the 24px dot column */}
       <div className="absolute left-[11px] top-0 bottom-0 w-px bg-gray-800" />
 
-      <div className="space-y-3 pl-8">
+      <div className="space-y-3">
         {events.map((evt) => {
           const ts = formatTimestamp(String(evt.properties.timestamp));
           const type = String(evt.properties.event_type || evt.properties.type || evt.label);
-          const color = getEventColor(type);
+          const isCall = type === 'support_call' || type === 'call' || !!evt.properties.direction;
+          const color = isCall
+            ? (evt.properties.outcome === 'completed' ? '#10b981'
+              : evt.properties.outcome === 'transferred' ? '#f59e0b'
+              : evt.properties.outcome === 'dropped' || evt.properties.outcome === 'failed' ? '#ef4444'
+              : '#6b7280')
+            : getEventColor(type);
           const amount = evt.properties.amount as number | null | undefined;
-          const label = type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+          const label = isCall
+            ? (evt.displayName || type.replace(/_/g, " "))
+            : type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+
+          // Nurix call-specific fields
+          const direction = evt.properties.direction as string | undefined;
+          const duration = evt.properties.duration_formatted as string || (evt.properties.duration ? `${Math.round(Number(evt.properties.duration) / 60)}m` : null);
+          const sentiment = evt.properties.sentiment as string | undefined;
+          const outcome = evt.properties.outcome as string | undefined;
+          const transferred = evt.properties.transferred as boolean | undefined;
+          const summary = evt.properties.summary as string | undefined;
+          const agent = evt.properties.agent as string | undefined;
+
+          const OUTCOME_ICON: Record<string, string> = { completed: '✓', transferred: '↗', dropped: '✕', follow_up_needed: '!', failed: '✗', in_progress: '…' };
+          const SENTIMENT_COLOR: Record<string, string> = { positive: '#10b981', neutral: '#6b7280', negative: '#ef4444' };
 
           return (
-            <div key={evt.id} className="relative flex items-start gap-0">
-              {/* Dot */}
-              <div
-                className="absolute -left-8 mt-[18px] w-[14px] h-[14px] rounded-full shrink-0 z-10"
-                style={{ backgroundColor: color }}
-              />
+            <div key={evt.id} className="flex items-start gap-3">
+              <div className="w-6 shrink-0 flex justify-center mt-[14px] relative z-10">
+                <div className="w-[14px] h-[14px] rounded-full" style={{ backgroundColor: color }} />
+              </div>
 
-              {/* Card */}
               <button
                 onClick={() => onEventClick?.(evt)}
-                className="w-full text-left bg-gray-900 hover:bg-gray-800 border border-gray-800 rounded-2xl px-4 py-3.5 transition-colors"
+                className="flex-1 text-left bg-gray-900 hover:bg-gray-800 border border-gray-800 rounded-2xl px-4 py-3.5 transition-colors"
               >
                 <div className="flex items-start justify-between gap-4">
-                  {/* Left: type + amount */}
-                  <div>
-                    <p className="text-sm font-semibold" style={{ color }}>
-                      {label}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold truncate" style={{ color }}>
+                      {isCall && direction && <span className="text-xs font-normal text-gray-500 mr-1">{direction === 'outbound' ? '↑ OB' : '↓ IB'}</span>}
+                      {isCall ? (agent || label) : label}
                     </p>
-                    {amount != null && amount > 0 && (
-                      <p className="text-sm text-gray-400 mt-0.5">
-                        ₹{Number(amount).toLocaleString("en-IN")}
-                      </p>
+
+                    {/* Call badges */}
+                    {isCall && (
+                      <div className="flex flex-wrap gap-1.5 mt-1.5">
+                        {outcome && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded font-medium" style={{ backgroundColor: `${color}22`, color }}>
+                            {String(OUTCOME_ICON[outcome] || '')} {outcome.replace(/_/g, ' ')}
+                          </span>
+                        )}
+                        {sentiment && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800" style={{ color: String(SENTIMENT_COLOR[sentiment] || '#6b7280') }}>
+                            {sentiment}
+                          </span>
+                        )}
+                        {transferred && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/30 text-amber-400">transferred</span>
+                        )}
+                        {duration && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-400">⏱ {duration}</span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Summary snippet */}
+                    {isCall && summary && (
+                      <p className="text-xs text-gray-500 mt-1.5 line-clamp-2 leading-relaxed">{summary}</p>
+                    )}
+
+                    {!isCall && amount != null && amount > 0 && (
+                      <p className="text-sm text-gray-400 mt-0.5">₹{Number(amount).toLocaleString("en-IN")}</p>
                     )}
                   </div>
 
-                  {/* Right: date / time / relative */}
                   <div className="text-right shrink-0">
                     <p className="text-sm text-gray-300">{ts.date}</p>
                     <p className="text-xs text-gray-500 mt-0.5">{ts.time}</p>
@@ -200,7 +255,7 @@ function AggregateTimeline({ events, onEventClick }: {
       <div className="relative">
         <div className="absolute left-[11px] top-0 bottom-0 w-px bg-gray-800" />
 
-        <div className="space-y-2 pl-8">
+        <div className="space-y-2">
           {byDate.map(([date, dayEvents]) => {
             const d = new Date(date);
             const label = d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
@@ -211,12 +266,14 @@ function AggregateTimeline({ events, onEventClick }: {
             const topAmount = dayEvents.reduce((s, e) => s + (Number(e.properties.amount) || 0), 0);
 
             return (
-              <div key={date} className="relative flex items-start gap-0">
-                {/* Dot */}
-                <div
-                  className="absolute -left-8 mt-[10px] w-[10px] h-[10px] rounded-full shrink-0 z-10"
-                  style={{ backgroundColor: barColor }}
-                />
+              <div key={date} className="flex items-start gap-3">
+                {/* Dot column — centered on the line */}
+                <div className="w-6 shrink-0 flex justify-center mt-[12px] relative z-10">
+                  <div
+                    className="w-[10px] h-[10px] rounded-full"
+                    style={{ backgroundColor: barColor }}
+                  />
+                </div>
 
                 {/* Card */}
                 <button

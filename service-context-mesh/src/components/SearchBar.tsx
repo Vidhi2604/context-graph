@@ -1,17 +1,26 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 interface SearchBarProps {
   onSearch: (query: string) => void;
   loading: boolean;
-  sampleQueries: string[];
   cypherInfo?: { cypher: string; confidence: number; interpretation: string } | null;
+  orgId?: string;
 }
 
-export default function SearchBar({ onSearch, loading, sampleQueries, cypherInfo }: SearchBarProps) {
+
+export default function SearchBar({ onSearch, loading, cypherInfo, orgId }: SearchBarProps) {
   const [query, setQuery] = useState("");
   const [showCypher, setShowCypher] = useState(false);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  useEffect(() => {
+    if (!orgId) return;
+    fetch("/api/search/suggestions", { headers: { "x-org-id": orgId } })
+      .then(r => r.json())
+      .then(d => { if (d.suggestions?.length) setSuggestions(d.suggestions); })
+      .catch(() => {});
+  }, [orgId]);
 
   const handleSubmit = () => {
     if (query.trim()) onSearch(query.trim());
@@ -28,34 +37,45 @@ export default function SearchBar({ onSearch, loading, sampleQueries, cypherInfo
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
             placeholder="Search anything..."
-            className="w-full bg-gray-900 border border-gray-700 rounded-lg pl-10 pr-4 py-3 text-sm focus:outline-none focus:border-emerald-500 transition-colors"
+            disabled={loading}
+            className="w-full bg-gray-900 border border-gray-700 rounded-lg pl-9 pr-4 py-2 text-sm focus:outline-none focus:border-emerald-500 transition-colors disabled:opacity-60"
           />
         </div>
         <button
           onClick={handleSubmit}
           disabled={loading || !query.trim()}
-          className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-6 py-3 rounded-lg text-sm font-medium transition-colors"
+          className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-5 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 min-w-[100px] justify-center"
         >
-          {loading ? "Searching..." : "Search"}
+          {loading ? (
+            <>
+              <svg className="animate-spin h-3.5 w-3.5 text-white shrink-0" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+              </svg>
+              Search
+            </>
+          ) : "Search"}
         </button>
       </div>
 
-      {/* Sample queries */}
-      <div className="flex items-center gap-2 text-xs text-gray-500">
-        <span>Try:</span>
-        {sampleQueries.slice(0, 3).map((sq) => (
-          <button
-            key={sq}
-            onClick={() => { setQuery(sq); onSearch(sq); }}
-            className="text-gray-400 hover:text-emerald-400 transition-colors"
-          >
-            {sq}
-          </button>
-        ))}
-      </div>
+
+      {/* Dynamic suggestions */}
+      {suggestions.length > 0 && !query && !loading && (
+        <div className="flex flex-wrap gap-2">
+          {suggestions.map((s, i) => (
+            <button
+              key={i}
+              onClick={() => { setQuery(s); onSearch(s); }}
+              className="text-xs px-3 py-1.5 bg-gray-900 border border-gray-800 rounded-full text-gray-400 hover:border-emerald-600 hover:text-emerald-400 transition-colors"
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Cypher info */}
-      {cypherInfo && (
+      {cypherInfo && !loading && (
         <div className="text-xs text-gray-600">
           <button
             onClick={() => setShowCypher(!showCypher)}

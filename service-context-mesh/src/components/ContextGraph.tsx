@@ -18,7 +18,6 @@ interface ContextGraphProps {
   edges: GraphEdge[];
   query: string;
   centerNodeId?: string;
-  similarSourceId?: string | null;
   onNodeClick?: (node: GraphNode) => void;
   onNodeDoubleClick?: (node: GraphNode) => void;
 }
@@ -44,8 +43,38 @@ const LABEL_COLORS: Record<string, string> = {
   Identity:       "#374151",
 };
 
+const LABEL_ICONS: Record<string, string> = {
+  Profile:        "👤",
+  Event:          "⚡",
+  Visit:          "🏥",
+  Product:        "📦",
+  Policy:         "📋",
+  Protocol:       "📋",
+  Agent:          "🤝",
+  Provider:       "👨‍⚕️",
+  Payment:        "💳",
+  Outcome:        "🎯",
+  Diagnosis:      "🔬",
+  Treatment:      "💊",
+  Commitment:     "📌",
+  InsuranceClaim: "🧾",
+  Department:     "🏢",
+  Medication:     "💉",
+};
+
+function hashColor(str: string): string {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  const colors = ["#3b82f6","#10b981","#8b5cf6","#f97316","#ec4899","#14b8a6","#eab308","#a855f7","#06b6d4","#f43f5e"];
+  return colors[Math.abs(hash) % colors.length];
+}
+
 function getColor(label: string): string {
-  return LABEL_COLORS[label] || "#6b7280";
+  return LABEL_COLORS[label] || hashColor(label);
+}
+
+function getIcon(label: string): string {
+  return LABEL_ICONS[label] || "◆";
 }
 
 function getRing(label: string): number {
@@ -219,7 +248,8 @@ function computeLayout(
 
   for (const [profileId, childIds] of Object.entries(ring2ByProfile)) {
     const baseAngle = profileAngles[profileId] ?? 0;
-    const spread = Math.PI / 3;
+    // Use full circle when many nodes, partial arc when few
+    const spread = childIds.length > 6 ? 2 * Math.PI : Math.min(Math.PI * 1.5, Math.PI / 3 * childIds.length);
     childIds.forEach((id, idx) => {
       const offset = childIds.length > 1 ? spread * (idx / (childIds.length - 1) - 0.5) : 0;
       positions[id] = {
@@ -279,30 +309,30 @@ function computeLayout(
     data: {
       label: (
         <div className="text-center px-2">
-          <div className="text-[9px] text-purple-300 mb-0.5 tracking-widest uppercase">Search</div>
-          <div className="font-semibold text-[11px] text-white leading-tight max-w-[110px] break-words">
-            {searchQuery.length > 35 ? searchQuery.slice(0, 35) + "…" : searchQuery}
+          <div className="text-[10px] text-purple-300 mb-1 tracking-widest uppercase font-medium">Search</div>
+          <div className="font-bold text-[13px] text-white leading-tight max-w-[120px] break-words">
+            {searchQuery.length > 30 ? searchQuery.slice(0, 30) + "…" : searchQuery}
           </div>
         </div>
       ),
     },
     style: {
-      background: "radial-gradient(circle, #5b21b6, #4c1d95)",
-      border: "2px solid #7c3aed",
+      background: "radial-gradient(circle, #5b21b6 0%, #3b0764 100%)",
+      border: "2px solid #a78bfa",
       borderRadius: "50%",
-      width: 130,
-      height: 130,
+      width: 140,
+      height: 140,
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
       color: "#fff",
-      boxShadow: "0 0 40px rgba(124,58,237,0.4)",
+      boxShadow: "0 0 40px rgba(124,58,237,0.5), 0 0 80px rgba(124,58,237,0.2)",
     },
   });
 
   // Data nodes
   for (const node of sorted) {
-    if (node.label === "Identity") continue; // hide identity nodes from graph
+    if (node.label === "Identity") continue;
     const pos = positions[node.id] || { x: 0, y: 0 };
     const color = getColor(node.label);
     const isProfile = node.label === "Profile";
@@ -310,48 +340,70 @@ function computeLayout(
     const isSuperseded = node.properties?.status === "superseded";
     const relevance = node.relevance ?? 0.7;
     const confidence = node.properties?.confidence_score as number | undefined;
+    const icon = getIcon(node.label);
+    const displayName = String(node.displayName || node.label);
 
-    const size = isProfile ? 90 : isEvent ? 72 : 60;
+    const width = isProfile ? 130 : isEvent ? 140 : 120;
+    const height = isProfile ? 130 : isEvent ? 70 : 65;
 
     flowNodes.push({
       id: node.id,
       position: pos,
       data: {
-        label: (
-          <div className="text-center px-1">
-            <div className="text-[8px] opacity-50 mb-0.5 uppercase tracking-wide">{node.label}</div>
-            <div
-              className="font-semibold text-[10px] leading-tight max-w-[70px] break-words"
-              style={{ textDecoration: isSuperseded ? "line-through" : "none", opacity: isSuperseded ? 0.6 : 1 }}
-            >
-              {String(node.displayName || node.label).slice(0, 18)}
+        label: isProfile ? (
+          // Profile: circle with icon + name
+          <div className="text-center px-2">
+            <div className="text-lg mb-0.5">{icon}</div>
+            <div className="font-bold text-[12px] text-white leading-tight max-w-[100px] break-words">
+              {displayName.slice(0, 20)}
             </div>
-            {confidence != null && (
-              <div className="text-[7px] opacity-40 mt-0.5">{Math.round(confidence * 100)}%</div>
-            )}
-            {isSuperseded && (
-              <div className="text-[7px] text-yellow-300 mt-0.5">superseded</div>
-            )}
+            <div className="text-[9px] mt-0.5 font-medium uppercase tracking-wider" style={{ color }}>
+              {node.label}
+            </div>
+          </div>
+        ) : (
+          // Non-profile: pill/card shape
+          <div className="flex items-center gap-2 px-2">
+            <span className="text-base shrink-0">{icon}</span>
+            <div className="min-w-0">
+              <div className="text-[9px] font-semibold uppercase tracking-wider opacity-70" style={{ color }}>
+                {node.label}
+              </div>
+              <div
+                className="font-semibold text-[11px] text-white leading-tight truncate max-w-[85px]"
+                style={{ textDecoration: isSuperseded ? "line-through" : "none" }}
+              >
+                {displayName.slice(0, 22)}
+              </div>
+              {confidence != null && (
+                <div className="text-[9px] mt-0.5" style={{ color: confidence > 0.8 ? "#10b981" : "#f59e0b" }}>
+                  {Math.round(confidence * 100)}% confidence
+                </div>
+              )}
+            </div>
           </div>
         ),
       },
       style: {
-        background: isSuperseded ? "#374151" : color,
-        border: isProfile
-          ? `2px solid ${color}`
-          : isSuperseded
-            ? "1px dashed #6b7280"
-            : "none",
-        borderRadius: isProfile ? "50%" : "10px",
-        width: size,
-        height: size,
+        background: isSuperseded
+          ? "#1f2937"
+          : isProfile
+            ? `radial-gradient(circle, ${color}25 0%, ${color}10 100%)`
+            : `${color}14`,
+        border: isSuperseded
+          ? "1px dashed #4b5563"
+          : `1.5px solid ${color}${isProfile ? "cc" : "70"}`,
+        borderRadius: isProfile ? "50%" : "12px",
+        width,
+        height,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         color: "#fff",
-        opacity: isSuperseded ? 0.4 : Math.max(0.5, 0.3 + relevance * 0.7),
-        boxShadow: isProfile ? `0 0 20px ${color}50` : "none",
-        fontSize: "11px",
+        opacity: isSuperseded ? 0.4 : Math.max(0.6, 0.3 + relevance * 0.7),
+        boxShadow: isProfile
+          ? `0 0 20px ${color}40, inset 0 0 20px ${color}10`
+          : `0 2px 8px rgba(0,0,0,0.4)`,
         cursor: "pointer",
       },
     });
@@ -401,17 +453,19 @@ function computeLayout(
     if (targetNode?.label === "Identity") continue;
 
     const edgeColor = edgeColors[edge.type] || "#374151";
+    const edgeLabel = edge.type?.replace(/_/g, " ").toLowerCase();
     flowEdges.push({
       id: edge.id,
       source: edge.source,
       target: edge.target,
       type: "smoothstep",
-      label: edge.type?.replace(/_/g, " "),
-      labelStyle: { fontSize: 8, fill: "#9ca3af", fontFamily: "monospace" },
-      labelBgStyle: { fill: "#111827", fillOpacity: 0.8 },
-      labelBgPadding: [2, 4] as [number, number],
-      markerEnd: { type: MarkerType.ArrowClosed, color: edgeColor, width: 10, height: 10 },
-      style: { stroke: edgeColor, strokeWidth: 1.2 },
+      label: edgeLabel,
+      labelStyle: { fontSize: 10, fill: edgeColor, fontWeight: 600, fontFamily: "system-ui" },
+      labelBgStyle: { fill: "#0f172a", fillOpacity: 0.9 },
+      labelBgPadding: [4, 6] as [number, number],
+      labelBgBorderRadius: 4,
+      markerEnd: { type: MarkerType.ArrowClosed, color: edgeColor, width: 12, height: 12 },
+      style: { stroke: edgeColor, strokeWidth: 1.5 },
     });
   }
 
@@ -422,7 +476,6 @@ export default function ContextGraph({
   nodes,
   edges,
   query,
-  similarSourceId,
   onNodeClick,
   onNodeDoubleClick,
 }: ContextGraphProps) {
@@ -431,29 +484,9 @@ export default function ContextGraph({
     [nodes, edges, query]
   );
 
-  // When showing similar results, tint all nodes orange/amber to distinguish
   const { flowNodes, flowEdges } = useMemo(() => {
-    if (!similarSourceId) return { flowNodes: rawFlowNodes, flowEdges: rawFlowEdges };
-    // Orange palette for similar context nodes
-    const tintedNodes = rawFlowNodes.map(n => {
-      if (n.id === "__search__") return n; // keep search node purple
-      return {
-        ...n,
-        style: {
-          ...n.style,
-          background: n.style?.background?.toString().includes("5b21b6") ? n.style.background
-            : `${String(n.style?.background || "#1f2937").replace(/0x[\da-f]+/gi, "")}`,
-          border: "1.5px solid #f97316",
-          boxShadow: "0 0 8px rgba(249,115,22,0.3)",
-        },
-      };
-    });
-    const tintedEdges = rawFlowEdges.map(e => ({
-      ...e,
-      style: { ...e.style, stroke: "#f97316", opacity: 0.7 },
-    }));
-    return { flowNodes: tintedNodes, flowEdges: tintedEdges };
-  }, [rawFlowNodes, rawFlowEdges, similarSourceId]);
+    return { flowNodes: rawFlowNodes, flowEdges: rawFlowEdges };
+  }, [rawFlowNodes, rawFlowEdges]);
 
   const [rfNodes, , onNodesChange] = useNodesState(flowNodes);
   const [rfEdges, , onEdgesChange] = useEdgesState(flowEdges);

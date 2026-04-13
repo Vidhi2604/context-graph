@@ -1,22 +1,19 @@
-export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { getOrgFromRequest, errorResponse } from "@/lib/api-auth";
 import { getAdapter, getConnectors, saveConnector, deleteConnector, maskConfig } from "@/lib/connectors/registry";
 import { ConnectorTypeSchema } from "@/types/connector";
 import { v4 as uuidv4 } from "uuid";
 
-// GET — list connectors for this org (credentials masked)
 export async function GET(req: NextRequest) {
   try {
     const session = await getOrgFromRequest(req);
-    const connectors = getConnectors(session.tenantId).map(maskConfig);
+    const connectors = (await getConnectors(session.tenantId)).map(maskConfig);
     return NextResponse.json({ connectors });
   } catch (error) {
     return errorResponse(error);
   }
 }
 
-// POST — create/register a connector
 export async function POST(req: NextRequest) {
   try {
     const session = await getOrgFromRequest(req);
@@ -24,10 +21,9 @@ export async function POST(req: NextRequest) {
 
     const parsed = ConnectorTypeSchema.safeParse(type);
     if (!parsed.success) {
-      return NextResponse.json({ error: `Invalid connector type. Must be: hubspot, zendesk, or nurix` }, { status: 400 });
+      return NextResponse.json({ error: `Invalid connector type. Must be: hubspot, zendesk, salesforce, zoho, or nurix` }, { status: 400 });
     }
 
-    // Test connection before saving
     const adapter = getAdapter(parsed.data);
     const test = await adapter.testConnection(credentials || {});
 
@@ -41,7 +37,7 @@ export async function POST(req: NextRequest) {
       created_at: new Date().toISOString(),
     };
 
-    saveConnector(config);
+    await saveConnector(config);
 
     return NextResponse.json({
       connector: maskConfig(config),
@@ -52,7 +48,6 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// DELETE — remove a connector
 export async function DELETE(req: NextRequest) {
   try {
     const session = await getOrgFromRequest(req);
@@ -62,7 +57,7 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "connector_id required" }, { status: 400 });
     }
 
-    const deleted = deleteConnector(session.tenantId, connector_id);
+    const deleted = await deleteConnector(session.tenantId, connector_id);
     if (!deleted) {
       return NextResponse.json({ error: "Connector not found" }, { status: 404 });
     }

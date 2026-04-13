@@ -1,4 +1,3 @@
-export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { getOrgFromApiKey, errorResponse } from "@/lib/api-auth";
 import { getAdapter } from "@/lib/connectors/registry";
